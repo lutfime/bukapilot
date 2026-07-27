@@ -29,6 +29,7 @@ class AlertLEDService:
         not_running_brightness: str = "200",
         topic_cs: str = "selfdriveState",
         topic_dc: str = "driverCameraState",
+        topic_sc: str = "sendcan",
         base_poll_ms: int = 500,
         overrides: Optional[Dict[str, Tuple[str, str, Optional[str]]]] = None,
         on_change: Optional[Callable[[bool, str, StateTuple], None]] = None,
@@ -50,7 +51,10 @@ class AlertLEDService:
         self.debug = debug
 
         self._stop = threading.Event()
-        self._sm = messaging.SubMaster([self.topic_cs, self.topic_dc])
+        self.topic_sc = topic_sc
+        self._sm = messaging.SubMaster([self.topic_cs, self.topic_dc, self.topic_sc])
+        self._sng_cyan_until: Optional[float] = None
+        self._poll_ms = min(self.base_poll_ms, 50)
 
         self._last_key: Optional[Tuple[str, str, Optional[str]]] = None
         self._last_state: Optional[StateTuple] = None
@@ -69,7 +73,7 @@ class AlertLEDService:
     def run_forever(self):
         while not self._stop.is_set():
             now = time.monotonic()
-            self._sm.update(self.base_poll_ms)
+            self._sm.update(self._poll_ms)
             now = time.monotonic()
 
             if self._sm.updated[self.topic_dc]:
@@ -77,6 +81,25 @@ class AlertLEDService:
                 v = getattr(dc, "integLines", None)
                 if isinstance(v, (int, float)):
                     self._last_integ = int(v)
+
+            if self._sm.updated[self.topic_sc]:
+                for frame in self._sm[self.topic_sc]:
+                    if self._is_sng_resume_tx(frame.address, frame.dat):
+                        self._sng_cyan_until = max(self._sng_cyan_until or 0.0, now + 1.0)
+                        key = ("CYAN", "solid", None)
+                        if key != self._last_key:
+                            brightness = str(self._map_integ_to_brightness_inverse(self._last_integ))
+                            desired: StateTuple = ("CYAN", "solid", None, brightness)
+                            self._apply(desired, active=False, alert_type="sngResume", force=True)
+                            self._last_key = key
+                        break
+
+            if self._sng_cyan_until is not None and now < self._sng_cyan_until:
+                continue
+
+            if self._sng_cyan_until is not None and now >= self._sng_cyan_until:
+                self._sng_cyan_until = None
+                self._last_key = None
 
             if self._sm.updated[self.topic_cs]:
                 cs = self._sm[self.topic_cs]
@@ -127,6 +150,21 @@ class AlertLEDService:
     #   ORANGE solid: noEntry, softDisable when not active, warning permanent (dashcam, etc.)
     #   BLUE solid:   startup events, userDisable when not active, low-priority permanent, preEnable, overrides
     #   YELLOW solid: not_running fallback (selfdriveState unavailable)
+
+    @staticmethod
+    def _is_sng_resume_tx(address: int, dat) -> bool:
+        """OP TX resume patterns only (sendcan); manual wheel/gas never appears here."""
+        if not dat or len(dat) < 2:
+            return False
+        b = bytes(dat)
+        if address == 0x3B0 and len(b) >= 3:
+            # BYD PCM SET+RES burst, not ACC cancel
+            return bool(b[0] & 0x18 == 0x18) and not (b[2] & 0x08)
+        if address == 643:
+            # Proton ACC RES-only SNG, not cruise cancel
+            return bool(b[0] & 0x08) and not (b[0] & 0x10) and not (b[1] & 0x80)
+        return False
+
     def _classify_key(self, alert_type: str, active: bool) -> Tuple[str, str, Optional[str]]:
         raw = (alert_type or "").strip()
         tl = raw.lower()

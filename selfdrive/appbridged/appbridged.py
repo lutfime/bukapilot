@@ -19,6 +19,9 @@ from opendbc.car.car_helpers import supported_cars
 from openpilot.common.features import Features
 from openpilot.selfdrive.appbridged.ble_helper import BLEBridge, ChunkReceiver
 from openpilot.selfdrive.appbridged.hardware_helper import HardwareHelper
+from openpilot.selfdrive.appbridged.video_constants import VIDEO_KEEPALIVE_PERIOD_SEC
+from openpilot.selfdrive.appbridged.video_protocol import VideoProtocolHandler
+from openpilot.selfdrive.appbridged.video_scanner import validate_storage
 
 # BLE Constants
 MESSAGE_HZ = 16 # Expected message rate, must match app visualisation value
@@ -28,6 +31,7 @@ DONGLE_ID = params.get("DongleId") or ""
 # BLE Channel IDs
 CHANNEL_VISUALISATION = 0x01
 CHANNEL_SETTINGS = 0x02
+CHANNEL_VIDEO = 0x03
 
 # Wi-Fi/nmcli Constants
 WIFI_CONNECT_TIMEOUT_SECONDS = 20 # Timeout for device Wi-Fi connection attempts
@@ -166,6 +170,7 @@ class AppBridge:
     ])
     self.rk = Ratekeeper(MESSAGE_HZ) # Ratekeeper for loop
     self.last_periodic_time = 0 # Track last periodic task
+    self.last_video_heartbeat_time = 0
     self.last_1hz_task_time = 0
     self.local_wlan_ip = None
     self.active_wlan_ssid = None
@@ -178,6 +183,9 @@ class AppBridge:
     self.hotspot_enabled = False
     self.hotspot_ip = None
     self.hw_helper = HardwareHelper()
+    self.video_handler = VideoProtocolHandler(self.ble, self.hw_helper)
+    self.ble.on_connect_callback = self.video_handler.on_ble_connected
+    self.ble.on_disconnect_callback = self.video_handler.on_ble_disconnected
 
   def scan_wifi(self):
     if hasattr(self, "wifiScanProcess"): # Avoid starting a new scan until the previous one finishes
@@ -286,6 +294,7 @@ class AppBridge:
     sett['networkType'] = self.hw_helper.get_network_type()
     sett['simStatus'] = self.hw_helper.get_sim_status()
     sett['remainingDataUpload'] = f"{int(self.sm['uploaderState'].immediateQueueSize)} MB" if (sd := self.hw_helper.get_sd_status()) is None else sd
+    sett['videoDlValid'] = validate_storage(self.hw_helper, sd)[0]
 
     if 0 <= self.send_car_names_cnt < 3:
       sett['carNames'] = SUPPORTED_CARS
@@ -417,6 +426,8 @@ class AppBridge:
     if m.get('msgType') == 'curPage':
       self.send_channel = c
       self.send_car_names_cnt = 0
+      if c == CHANNEL_VIDEO:
+        self.video_handler.on_channel_active()
       return None
     return c, m # Other message types, pass to next function
 
@@ -449,11 +460,17 @@ class AppBridge:
         while (msg := self.receiver.get_message()) is not None:
           if not (res := self.handle_send_channel(msg)):
             continue # If dongle ID does not match or it is a curPage message
+          c, m = res
+          if c == CHANNEL_VIDEO:
+            self.video_handler.handle_message(m, cur_time)
+            continue
           if is_offroad is None:
             is_offroad = params.get_bool("IsOffroad")
           if state is None:
             state = sm['selfdriveState'].state
           self.apply_settings_message(res, state, cur_time, is_offroad)
+
+        self.video_handler.tick(cur_time)
 
         # 3 Hz settings send
         if cur_time - self.last_periodic_time >= 0.333:
@@ -469,6 +486,13 @@ class AppBridge:
         # Visualisation send
         if self.send_channel == CHANNEL_VISUALISATION:
           self.send_visualisation_message(is_metric)
+
+        # 2 Hz video keepalive — satisfies app Watchcat without racing videoListReq.
+        if self.send_channel == CHANNEL_VIDEO:
+          if (cur_time - self.last_video_heartbeat_time >= VIDEO_KEEPALIVE_PERIOD_SEC
+              and not self.video_handler.should_pause_video_keepalive()):
+            self.last_video_heartbeat_time = cur_time
+            self.video_handler.send_list_keepalive()
 
       rk.keep_time()
 

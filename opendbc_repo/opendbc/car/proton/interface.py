@@ -63,6 +63,13 @@ class CarInterface(CarInterfaceBase):
       ret.lateralTuning.torque.friction = 0.1
       ret.lateralTuning.torque.latAccelOffset = 0.0
       ret.lateralTuning.torque.steeringAngleDeadzoneDeg = 0.0
+      # Longitudinal: restore release_ka2 gains. x70-ka2/staging had zeroed kp/ki (base default [0.])
+      # -> pure feedforward, no feedback correction. release_ka2 X70 used these (proven on this car).
+      ret.longitudinalTuning.kpBP = [0.0, 5.0, 20.0]
+      ret.longitudinalTuning.kpV  = [0.7, 0.5, 0.4]
+      ret.longitudinalTuning.kiBP = [0.0, 5.0, 20.0]
+      ret.longitudinalTuning.kiV  = [0.2, 0.15, 0.1]
+      ret.longitudinalActuatorDelay = 0.45  # release_ka2 used 0.4-0.5; x70-ka2 base was 0.6
       ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0.0], [500]]
     elif candidate == CAR.PROTON_X90:
       ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0.0], [256]]

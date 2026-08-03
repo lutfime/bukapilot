@@ -32,7 +32,7 @@ class CarInterface(CarInterfaceBase):
 
     ret.steerControlType = car.CarParams.SteerControlType.torque
     ret.steerLimitTimer = 0.1
-    ret.steerActuatorDelay = 0.30
+    ret.steerActuatorDelay = 0.17  # measured ~170ms (cmd vs actual steer angle, full-rate rlog); was 0.30
 
     ret.lateralTuning.init("pid")
 

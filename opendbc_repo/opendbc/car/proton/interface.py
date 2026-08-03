@@ -55,6 +55,14 @@ class CarInterface(CarInterfaceBase):
       ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0.0], [530]]
     elif candidate == CAR.PROTON_X70:
       ret.steerActuatorDelay = 0.17  # measured ~170ms (cmd vs actual steer angle, full-rate rlog); KA1 had 0.13
+      # Lateral controller: torque (self-tuning via locationd/torqued) instead of PID.
+      # Seeds from torque_data/override.toml: PROTON_X70=[2.5, 2.5, 0.1]=[latAccelFactor, maxLatAccel, friction].
+      # torqued refines latAccelFactor/friction online; needs 'proton' in ALLOWED_CARS (torqued.py).
+      ret.lateralTuning.init("torque")
+      ret.lateralTuning.torque.latAccelFactor = 2.5
+      ret.lateralTuning.torque.friction = 0.1
+      ret.lateralTuning.torque.latAccelOffset = 0.0
+      ret.lateralTuning.torque.steeringAngleDeadzoneDeg = 0.0
       ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0.0], [500]]
     elif candidate == CAR.PROTON_X90:
       ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0.0], [256]]

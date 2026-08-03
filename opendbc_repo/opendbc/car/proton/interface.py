@@ -32,7 +32,7 @@ class CarInterface(CarInterfaceBase):
 
     ret.steerControlType = car.CarParams.SteerControlType.torque
     ret.steerLimitTimer = 0.1
-    ret.steerActuatorDelay = 0.17  # measured ~170ms (cmd vs actual steer angle, full-rate rlog); was 0.30
+    ret.steerActuatorDelay = 0.30          # default; X70 overrides below
 
     ret.lateralTuning.init("pid")
 
@@ -54,6 +54,7 @@ class CarInterface(CarInterfaceBase):
     elif candidate == CAR.PROTON_S70:
       ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0.0], [530]]
     elif candidate == CAR.PROTON_X70:
+      ret.steerActuatorDelay = 0.17  # measured ~170ms (cmd vs actual steer angle, full-rate rlog); KA1 had 0.13
       ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0.0], [500]]
     elif candidate == CAR.PROTON_X90:
       ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0.0], [256]]

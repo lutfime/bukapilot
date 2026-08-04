@@ -155,7 +155,193 @@ script:
 
 ---
 
-## Rollback
+## The exact modeld.py changes needed (do these on-device, you can iterate against real errors)
+
+bukapilot's `modeld.py` is heavily customized (OpenCL warp via `DrivingModelFrame`, KA2 X-offset,
+blip guard, stage capture, CL-rolling path) so I can't paste upstream 0.11 in. But the patterns
+are clear from upstream `modeld.py` + the metadata. Here are the precise edits.
+
+### File 1: `selfdrive/modeld/modeld.py`
+
+**Edit A — Add the supercombo model paths + selector (near line 53-65).**
+Currently the RKNN path keys off `driving_vision.rknn` + `driving_policy.rknn`. Add a third
+option for the single supercombo model:
+```python
+SUPERCOMBO_RKNN_PATH = MODEL_DIR / os.getenv("RKNN_SUPERCOMBO_MODEL", "driving_supercombo.rknn")
+SUPERCOMBO_METADATA_PATH = MODEL_DIR / 'driving_supercombo_metadata.pkl'
+
+def _use_rknn_supercombo() -> bool:
+  """Use the fused 0.11 supercombo model when driving_supercombo.rknn exists."""
+  return SUPERCOMBO_RKNN_PATH.exists() and SUPERCOMBO_METADATA_PATH.exists()
+```
+
+**Edit B — Add a `_load_supercombo_metadata()` helper (next to `_load_rknn_metadata`).**
+```python
+def _load_supercombo_metadata():
+  with open(SUPERCOMBO_METADATA_PATH, 'rb') as f:
+    meta = pickle.load(f)
+  out_size = int(np.prod(meta['output_shapes']['outputs']))
+  return {
+    'input_shapes': meta['input_shapes'],
+    'input_names': list(meta['input_shapes'].keys()),
+    'output_slices': meta['output_slices'],
+    'output_size': out_size,
+  }
+```
+
+**Edit C — Add a `ModelStateSupercomboRKNN` class.** I wrote the runner
+(`selfdrive/modeld/runners/driving_supercombo_rknn.py` — committed) that does the actual RKNN
+call. The modeld.py class wraps it with the OpenCL warp + queue management bukapilot needs.
+Skeleton:
+```python
+class ModelStateSupercomboRKNN:
+  """Single fused 0.11 supercombo model on RKNN. Reads shapes from metadata (no hardcodes)."""
+
+  def __init__(self, context: CLContext):
+    meta = _load_supercombo_metadata()
+    self.input_shapes = meta['input_shapes']           # read from metadata, handles 24 vs 25
+    self.input_names = meta['input_names']              # ['img','big_img','desire_pulse','traffic_convention','action_t','features_buffer']
+    self.output_slices = meta['output_slices']          # 15 slices incl. action at 2062-2066
+    self._output_size = meta['output_size']             # 2580
+    self.vision_input_names = [k for k in self.input_shapes if 'img' in k]  # ['img','big_img']
+    # Load the runner I wrote (handles fp16 cast, layout, fb truncation)
+    from openpilot.selfdrive.modeld.runners.driving_supercombo_rknn import DrivingSupercomboRKNNRunner
+    self._rknn = DrivingSupercomboRKNNRunner(MODEL_DIR)
+    # Reuse bukapilot's OpenCL warp machinery — same as ModelStateRKNN
+    self.frames = {
+      name: DrivingModelFrame(context, ModelConstants.MODEL_RUN_FREQ // ModelConstants.MODEL_CONTEXT_FREQ)
+      for name in self.vision_input_names
+    }
+    self.prev_desire = np.zeros(ModelConstants.DESIRE_LEN, dtype=np.float32)
+    # Build numpy_inputs for the vector inputs FROM metadata shapes (no 25/24 hardcode)
+    self.numpy_inputs = {
+      k: np.zeros(self.input_shapes[k], dtype=np.float32)
+      for k in ['desire_pulse', 'traffic_convention', 'action_t', 'features_buffer']
+    }
+    # Reuse the InputQueues for the temporal context buffer (produces N frames; truncation in runner)
+    self.full_input_queues = InputQueues(
+      ModelConstants.MODEL_CONTEXT_FREQ, ModelConstants.MODEL_RUN_FREQ, ModelConstants.N_FRAMES
+    )
+    for k in ['desire_pulse', 'features_buffer']:
+      self.full_input_queues.update_dtypes_and_shapes(
+        {k: self.numpy_inputs[k].dtype}, {k: self.numpy_inputs[k].shape}
+      )
+    self.full_input_queues.reset()
+    self.flat_output = np.zeros(self._output_size, dtype=np.float32)
+    self.parser = Parser()
+
+  def slice_outputs(self, model_outputs, output_slices):
+    return {k: model_outputs[np.newaxis, v] for k, v in output_slices.items()}
+
+  def run(self, bufs, transforms, inputs, prepare_only, frame_id=None):
+    # desire rising-edge pulse (same as ModelStateRKNN)
+    inputs['desire_pulse'][0] = 0
+    new_desire = np.where(inputs['desire_pulse'] - self.prev_desire > .99, inputs['desire_pulse'], 0)
+    self.prev_desire[:] = inputs['desire_pulse']
+
+    # OpenCL warp (reuse bukapilot's machinery)
+    imgs_cl = {name: self.frames[name].prepare(bufs[name], transforms[name].flatten()) for name in self.vision_input_names}
+    img_np = self.frames['img'].buffer_from_cl(imgs_cl['img']).reshape(self.input_shapes['img'])
+    big_img_np = self.frames['big_img'].buffer_from_cl(imgs_cl['big_img']).reshape(self.input_shapes['big_img'])
+
+    if prepare_only:
+      return None
+
+    # The action_t input is NEW vs 0.10 — bukapilot's ModelStateRKNN doesn't build it.
+    # upstream builds it in main() as np.array([lat_action_t, long_action_t]).
+    # For the first test, pass it through from inputs (main() must populate inputs['action_t']).
+    action_t = inputs.get('action_t', np.zeros(self.input_shapes['action_t'], dtype=np.float32))
+
+    # NOTE: features_buffer needs the hidden_state from the PREVIOUS frame.
+    # On the very first frame there is no previous; use zeros (matches upstream warmup behavior).
+    # After the first frame, slice hidden_state out of flat_output and feed it back.
+
+    # Run the single fused model
+    self.flat_output = self._rknn.run(
+      img_np, big_img_np,
+      self.numpy_inputs['desire_pulse'],
+      self.numpy_inputs['traffic_convention'],
+      action_t,
+      self.numpy_inputs['features_buffer'],
+    ).reshape(-1)
+
+    # Slice + parse the flat 2580 output (reuses the same Parser as the split path)
+    outputs_dict = self.parser.parse_outputs(self.slice_outputs(self.flat_output, self.output_slices))
+
+    # Feed hidden_state back into features_buffer for next frame (the temporal context).
+    # Truncation to the model's expected shape happens inside the runner.
+    self.full_input_queues.enqueue({'features_buffer': outputs_dict['hidden_state'], 'desire_pulse': new_desire})
+    for k in ['desire_pulse', 'features_buffer']:
+      self.numpy_inputs[k][:] = self.full_input_queues.get(k)[k]
+    self.numpy_inputs['traffic_convention'][:] = inputs['traffic_convention']
+    self.numpy_inputs['action_t'][:] = action_t
+
+    return outputs_dict
+```
+
+**Edit D — Wire it into `main()` (around line 590).** Add the supercombo branch:
+```python
+if _use_rknn_supercombo():
+  cloudlog.warning("using RKNN supercombo runner (0.11 fused model)")
+  model = ModelStateSupercomboRKNN(cl_context)
+elif _use_rknn_driving():
+  cloudlog.warning("using RKNN split runner (vision=%s policy=%s)", VISION_RKNN_PATH.name, POLICY_RKNN_PATH.name)
+  model = ModelStateRKNN(cl_context)
+else:
+  ...
+```
+
+**Edit E — Populate `inputs['action_t']` in the main loop** (before `model.run(...)`).
+Copy from upstream:
+```python
+lat_action_t = lat_delay + frame_delay + action_delay
+long_action_t = long_delay + frame_delay + action_delay
+inputs['action_t'] = np.array([lat_action_t, long_action_t], dtype=np.float32)
+```
+(bukapilot's main loop already computes `lat_delay`/`long_delay`; check it has `frame_delay`/`action_delay` too — if not, copy those two lines from upstream.)
+
+### File 2: `selfdrive/modeld/runners/driving_supercombo_rknn.py`
+**Already written + committed.** Loads `driving_supercombo.rknn`, feeds all 6 inputs in one
+call, casts to fp16, truncates features_buffer to the metadata shape (handles 25→24), returns
+the flat 2580 output.
+
+### File 3: `selfdrive/modeld/constants.py`
+**Already done.** `ACTION_WIDTH = 2` added.
+
+### What's deliberately NOT carried over from the split path
+- Blip guard (`_apply_blip_guard`) — that was a workaround for the 0.10 split RKNN's plan
+  output. The 0.11 fused model may not need it. Leave it out for the first test; add back if
+  you see straight-blips.
+- Stage capture (`_stage_capture`) — debug tooling, not needed for first boot.
+- CL-rolling path — that was an optimization for the split vision→policy handoff. The fused
+  model has no handoff, so it's moot.
+
+### The 25→24 question, resolved
+Upstream reads `features_buffer` shape from metadata (`self.input_shapes[k]`), so it never
+hardcodes 25 or 24. The `InputQueues` still produces 25 frames (from `MODEL_CONTEXT_FREQ=5`),
+but the runner truncates to the model's expected 24 before feeding (`driving_supercombo_rknn.py`
+does `fb = fb[:fb_needed]` where `fb_needed` comes from metadata). **So 25→24 is handled
+automatically by reading the shape from metadata + truncating in the runner.** No manual edit.
+
+### The 20 Hz question — how to verify on device
+After boot, read `modelV2.modelExecutionTime` (the model publishes it every frame):
+```bash
+# on the KA2 via SSH:
+python3 -c "
+import cereal.messaging as messaging
+sm = messaging.SubMaster(['modelV2'])
+while True:
+  sm.update(100)
+  if sm.updated['modelV2']:
+    t = sm['modelV2'].modelExecutionTime
+    print(f'{t*1000:.1f} ms  ({1/t:.1f} Hz)' if t > 0 else 'no data')
+"
+```
+Pass = averages ≤ 50 ms (20 Hz). Watch `logcat | grep -i rknn` for CPU-fallback warnings
+(those would drag the rate down).
+
+---
+
 
 All changes are on `x70-test`, off `staging`. To revert:
 ```

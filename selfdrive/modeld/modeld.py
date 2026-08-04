@@ -64,7 +64,7 @@ def _use_rknn_driving() -> bool:
     return False
   return os.getenv('USE_RKNN', '1') != '0'
 
-LAT_SMOOTH_SECONDS = 0.0
+LAT_SMOOTH_SECONDS = 0.1
 LONG_SMOOTH_SECONDS = 0.3
 MIN_LAT_CONTROL_SPEED = 0.3
 
@@ -102,20 +102,31 @@ def read_drive_path_offset(params: Params) -> float:
     params.put("DrivePathOffset", stored)
   return val
 
+def should_stop_from_action(v_ego: float, desired_accel: float) -> bool:
+  """Stop intent threshold, matches upstream 0.11 should_stop()."""
+  return bool(v_ego < 0.3 and desired_accel < 0.1)
+
 def get_action_from_model(model_output: dict[str, np.ndarray], prev_action: log.ModelDataV2.Action,
                           lat_action_t: float, long_action_t: float, v_ego: float) -> log.ModelDataV2.Action:
-    plan = model_output['plan'][0]
-    desired_accel, should_stop = get_accel_from_plan(plan[:,Plan.VELOCITY][:,0],
-                                                     plan[:,Plan.ACCELERATION][:,0],
-                                                     ModelConstants.T_IDXS,
-                                                     action_t=long_action_t)
-    desired_accel = smooth_value(desired_accel, prev_action.desiredAcceleration, LONG_SMOOTH_SECONDS)
+    if 'action' not in model_output:
+      # Legacy model (0.10 split, current .rknn): derive action from the plan trajectory.
+      plan = model_output['plan'][0]
+      desired_accel, should_stop = get_accel_from_plan(plan[:,Plan.VELOCITY][:,0],
+                                                       plan[:,Plan.ACCELERATION][:,0],
+                                                       ModelConstants.T_IDXS,
+                                                       action_t=long_action_t)
+      desired_curvature = get_curvature_from_plan(plan[:,Plan.T_FROM_CURRENT_EULER][:,2],
+                                                  plan[:,Plan.ORIENTATION_RATE][:,2],
+                                                  ModelConstants.T_IDXS,
+                                                  v_ego,
+                                                  lat_action_t)
+    else:
+      # 0.11 model with a direct action head: curvature/accel emitted by the model itself.
+      desired_accel = float(model_output['action'][0,1])
+      desired_curvature = float(model_output['action'][0,0]) / (max(1.0, v_ego))**2
+      should_stop = should_stop_from_action(v_ego, desired_accel)
 
-    desired_curvature = get_curvature_from_plan(plan[:,Plan.T_FROM_CURRENT_EULER][:,2],
-                                                plan[:,Plan.ORIENTATION_RATE][:,2],
-                                                ModelConstants.T_IDXS,
-                                                v_ego,
-                                                lat_action_t)
+    desired_accel = smooth_value(desired_accel, prev_action.desiredAcceleration, LONG_SMOOTH_SECONDS)
     if v_ego > MIN_LAT_CONTROL_SPEED:
       desired_curvature = smooth_value(desired_curvature, prev_action.desiredCurvature, LAT_SMOOTH_SECONDS)
     else:

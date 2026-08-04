@@ -27,7 +27,7 @@ class ConditionalExperimentalMode:
   def update(self, car_state, lead, model_data, controls_state):
     # model_data is modelV2; curvature can be 0 when orientationRate.z/velocity.x are empty or zero (e.g. RKNN policy output or first frames)
     if self.frame % 10 == 0:
-      self.cem_enabled = self.params.get_bool("ConditionalExperimentalMode")
+      self.cem_enabled = False  # CEM disabled: keep Experimental always on (user pref; CEM+aggressive gated it off, blocking corner-slowing)
 
     v_ego = car_state.vEgo
 

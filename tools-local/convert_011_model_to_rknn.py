@@ -39,7 +39,11 @@ except ImportError:
 
 # --- Configuration ----------------------------------------------------------
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+# REPO_ROOT: honor env override (needed when running in Docker where the script path's
+# parents don't match the repo root). Default: parents[3] of this script (tools-local/x.py ->
+# repo root). Inside the container at /work/tools-local/x.py, parents[2]=/ which is wrong,
+# so REPO_ROOT_OVERRIDE=/work must be set in the Docker invocation.
+REPO_ROOT = Path(os.environ.get("REPO_ROOT_OVERRIDE", "")).resolve() if os.environ.get("REPO_ROOT_OVERRIDE") else Path(__file__).resolve().parents[2]
 MODELS_DIR = REPO_ROOT / "selfdrive" / "modeld" / "models"
 
 ONNX_URL = "https://github.com/commaai/openpilot/raw/master/openpilot/selfdrive/modeld/models/driving_supercombo.onnx"
@@ -59,12 +63,21 @@ def download_onnx_if_missing():
   if ONNX_PATH.exists() and ONNX_PATH.stat().st_size > 10_000_000:
     print(f"[ok] ONNX already present: {ONNX_PATH} ({ONNX_PATH.stat().st_size/1e6:.1f} MB)")
     return
-  print(f"[download] fetching {ONNX_URL} (via curl -L, ~92 MB)")
+  print(f"[download] fetching {ONNX_URL} (~92 MB)")
   MODELS_DIR.mkdir(parents=True, exist_ok=True)
-  import subprocess
-  ret = subprocess.call(["curl", "-sL", ONNX_URL, "-o", str(ONNX_PATH)])
-  if ret != 0 or ONNX_PATH.stat().st_size < 10_000_000:
-    print(f"[FAIL] download failed (size={ONNX_PATH.stat().st_size if ONNX_PATH.exists() else 0})", file=sys.stderr)
+  import urllib.request
+  try:
+    urllib.request.urlretrieve(ONNX_URL, ONNX_PATH)
+  except Exception:
+    # urlretrieve hits LFS pointers on github raw; fall back to curl -L which follows redirects
+    import subprocess
+    try:
+      subprocess.call(["curl", "-sL", ONNX_URL, "-o", str(ONNX_PATH)], check=True)
+    except (FileNotFoundError, subprocess.CalledProcessError):
+      print(f"[FAIL] could not download (no curl/urllib). Place the model manually at {ONNX_PATH}", file=sys.stderr)
+      sys.exit(1)
+  if not (ONNX_PATH.exists() and ONNX_PATH.stat().st_size > 10_000_000):
+    print(f"[FAIL] download incomplete (size={ONNX_PATH.stat().st_size if ONNX_PATH.exists() else 0})", file=sys.stderr)
     sys.exit(1)
   print(f"[ok] downloaded: {ONNX_PATH} ({ONNX_PATH.stat().st_size/1e6:.1f} MB)")
 
@@ -117,21 +130,52 @@ def extract_metadata_from_onnx():
 
 # --- Main -------------------------------------------------------------------
 
+def cast_uint8_inputs():
+  """RKNN-Toolkit2 w16a16i build rejects UINT8 inputs ("Not Support Dtype: 2").
+  Cast img/big_img from UINT8 to FLOAT (matches bukapilot runtime which casts to float16)."""
+  import subprocess
+  ret = subprocess.call([sys.executable, str(Path(__file__).parent / "cast_uint8_inputs_to_float.py"), str(ONNX_PATH)])
+  if ret != 0:
+    print(f"[FAIL] UINT8 cast failed (exit {ret})", file=sys.stderr)
+    sys.exit(1)
+
+def downconvert_opset_if_needed(max_opset: int = 19):
+  """RKNN-Toolkit2 v2.3.2 supports ONNX opset <= 19; comma's 0.11 model is opset 20.
+  The opset-20-only op is native Gelu (39 instances). rewrite_gelu_for_opset19.py replaces
+  each Gelu with its erf-subgraph (Gelu(x) = 0.5*x*(1+erf(x/sqrt(2)))), then we downconvert."""
+  m = onnx.load(str(ONNX_PATH))
+  current = max((o.version for o in m.opset_import), default=0)
+  if current <= max_opset:
+    print(f"[ok] opset {current} <= {max_opset}, no downconvert needed")
+    return
+  print(f"[downconvert] opset {current} -> {max_opset}")
+  import subprocess
+  ret = subprocess.call([sys.executable, str(Path(__file__).parent / "rewrite_gelu_for_opset19.py"), str(ONNX_PATH)])
+  if ret != 0:
+    print(f"[FAIL] Gelu rewrite failed (exit {ret})", file=sys.stderr)
+    sys.exit(1)
+  print(f"[ok] saved as opset {max_opset}")
+
 def main():
   download_onnx_if_missing()
   metadata = extract_metadata_from_onnx()
+  cast_uint8_inputs()
+  downconvert_opset_if_needed(max_opset=19)
 
   print(f"\n[convert] {ONNX_PATH.name} -> {RKNN_PATH.name} (target={TARGET_PLATFORM}, fp16={QUANTIZE_FP16})")
 
   rknn = RKNN(verbose=True)
 
   # --- config ---
-  # mean/std empty: preprocessing is baked into the ONNX (inputs are uint8 with internal normalization)
+  # The img/big_img inputs were UINT8; cast_uint8_inputs_to_float.py changes them to FLOAT
+  # (matching bukapilot's runtime which casts uint8->float16 before feeding). RKNN's w16a16i
+  # build rejects UINT8 ("Not Support Dtype: 2"), so the cast is required.
+  # mean/std empty: the model handles its own normalization internally once inputs are float.
   rknn.config(
     mean_values=[[]],
     std_values=[[]],
     target_platform=TARGET_PLATFORM,
-    quantized_dtype='w8a16' if QUANTIZE_FP16 else 'w8a8',
+    quantized_dtype='w16a16i' if QUANTIZE_FP16 else 'w8a8',
     quantized_method='channel',
     optimization_level=3,
   )

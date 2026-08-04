@@ -467,8 +467,11 @@ class Ka2(HardwareBase):
       return 0
 
   def get_npu_usage_percent(self):
-    with open("/sys/kernel/debug/rknpu/load", "r") as f:
-      npu_load = f.read().strip()
+    try:
+      with open("/sys/kernel/debug/rknpu/load", "r") as f:
+        npu_load = f.read().strip()
+    except (PermissionError, FileNotFoundError, OSError):
+      return [0, 0, 0]
 
     try:
       return [int(x.split('%')[0]) for x in npu_load.split() if '%' in x]

@@ -88,6 +88,23 @@ struct DriveFrame: Equatable {
   /// True ego speed in m/s (key "vEgo"), needed to recompute steering math on
   /// the phone if we ever extend it. May differ slightly from vEgoCluster.
   let vEgo: Double?
+
+  /// All cars detected by the model (leadsV3), not just the radar lead.
+  /// Each entry: {x: meters ahead, y: meters left, p: probability, v: speed m/s}.
+  let detectedCars: [DetectedCar]
+
+  /// Lane line probabilities (0..1) for l1..l4. Keys p1..p4.
+  let laneLineProbs: [Double]
+  /// Road edge stds for r1, r2. Keys s1, s2.
+  let roadEdgeStds: [Double]
+}
+
+/// One car detected by the vision model (from modelV2.leadsV3).
+struct DetectedCar: Equatable {
+  let x: Double        // meters ahead
+  let y: Double        // meters left (openpilot convention)
+  let probability: Double
+  let speed: Double    // absolute speed m/s
 }
 
 /// Decodes a raw msgpack visualisation dict into a `DriveFrame`.
@@ -135,6 +152,22 @@ enum DriveFrameDecoder {
     let laneKeys = ["l1", "l2", "l3", "l4"]
     let edgeKeys = ["r1", "r2"]
 
+    let detectedCars: [DetectedCar] = {
+      guard let arr = raw["cars"] as? [Any] else { return [] }
+      return arr.compactMap { item -> DetectedCar? in
+        guard let d = item as? [String: Any] else { return nil }
+        func dbl(_ k: String) -> Double {
+          if let n = d[k] as? Double { return n }
+          if let n = d[k] as? Int { return Double(n) }
+          return 0
+        }
+        return DetectedCar(x: dbl("x"), y: dbl("y"), probability: dbl("p"), speed: dbl("v"))
+      }
+    }()
+
+    let laneLineProbs = ["p1", "p2", "p3", "p4"].compactMap { doubleField($0) }
+    let roadEdgeStds = ["s1", "s2"].compactMap { doubleField($0) }
+
     return DriveFrame(
       frameId: intField("f") ?? 0,
       path: path("p"),
@@ -156,7 +189,10 @@ enum DriveFrameDecoder {
       dongleId: stringField("d"),
       confidence: doubleField("cf"),
       steeringLimit: doubleField("sl"),
-      vEgo: doubleField("vEgo")
+      vEgo: doubleField("vEgo"),
+      detectedCars: detectedCars,
+      laneLineProbs: laneLineProbs,
+      roadEdgeStds: roadEdgeStds
     )
   }
 }

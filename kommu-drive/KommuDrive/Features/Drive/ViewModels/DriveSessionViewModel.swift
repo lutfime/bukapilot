@@ -87,14 +87,88 @@ final class DriveSessionViewModel: ObservableObject {
 
   /// Tell the device which channel the app is currently viewing.
   /// Mirrors `appbridged.py:handle_send_channel`'s `msgType: 'curPage'` flow.
-  /// Phase 1 always wants the visualisation channel.
+  ///
+  /// IMPORTANT: the curPage message must be sent on channel 0x01 (visualisation)
+  /// because the device sets `send_channel = c` (the incoming channel). If we
+  /// send it on 0x02, the device would stream settings, not visualisation.
   func requestVisualisation() {
     let payload: [String: Any] = [
       "msgType": "curPage",
-      "channel": Int(BLEProtocol.Channel.visualisation.rawValue),
     ]
     let blob = MsgpackEncoder.encode(payload)
-    ble.send(blob)
+    ble.send(blob, channel: BLEProtocol.Channel.visualisation.rawValue)
+  }
+
+  // MARK: Commands to device (channel 0x02)
+
+  /// Every outbound command must include `deviceList` with our DongleId (or
+  /// `devMode: true`) or the device drops it. See `handle_send_channel`.
+  /// Commands go on channel 0x02 (settings).
+  private func sendCommand(_ fields: [String: Any]) {
+    var payload = fields
+    if let dongle = settings.dongleID {
+      payload["deviceList"] = [dongle]
+    } else {
+      payload["devMode"] = true
+    }
+    let blob = MsgpackEncoder.encode(payload)
+    ble.send(blob, channel: BLEProtocol.Channel.settings.rawValue)
+  }
+
+  /// Save a bool toggle (e.g. OpenpilotEnabledToggle, QuietMode, ...).
+  /// Maps to `msgType: 'saveToggle'` in appbridged.
+  func saveToggle(_ key: String, value: Bool) {
+    sendCommand(["msgType": "saveToggle", key: value])
+  }
+
+  /// Reboot the device. Only acts when openpilot is disabled.
+  func rebootDevice() {
+    sendCommand(["msgType": "reboot"])
+  }
+
+  /// Reset calibration (clears CalibrationParams, LiveParameters, etc.).
+  func resetCalibration() {
+    sendCommand(["msgType": "resetCalibration"])
+  }
+
+  /// Check for software updates.
+  func checkForUpdate() {
+    sendCommand(["msgType": "update", "action": "check"])
+  }
+
+  /// Install a fetched update (triggers reboot).
+  func installUpdate() {
+    sendCommand(["msgType": "update", "action": "install"])
+  }
+
+  /// Fetch update data in the background.
+  func fetchUpdate() {
+    sendCommand(["msgType": "update", "action": "fetch"])
+  }
+
+  /// Switch updater target branch and trigger check.
+  func changeTargetBranch(_ branch: String) {
+    sendCommand(["msgType": "changeTargetBranch", "targetBranch": branch])
+  }
+
+  // MARK: WiFi commands
+
+  /// Ask the device to scan for Wi-Fi networks. Results arrive in the next
+  /// settings frame(s) as `wifiList: [{ssid, password: bool}]`.
+  func scanWifi() {
+    sendCommand(["msgType": "scanWifi"])
+  }
+
+  /// Connect to a Wi-Fi network.
+  func connectWifi(ssid: String, password: String?) {
+    var cmd: [String: Any] = ["msgType": "wifi", "action": "connect", "ssid": ssid]
+    if let password { cmd["password"] = password }
+    sendCommand(cmd)
+  }
+
+  /// Forget a saved Wi-Fi network.
+  func forgetWifi(ssid: String) {
+    sendCommand(["msgType": "wifi", "action": "forget", "ssid": ssid])
   }
 
   // MARK: Message handling
@@ -125,8 +199,11 @@ final class DriveSessionViewModel: ObservableObject {
       case .settings:
         settings = DeviceSettings.decode(dict)
         // Once settings arrive we know the DongleId; ask for the visualisation
-        // stream so the device starts pushing frames to us.
-        requestVisualisation()
+        // stream so the device starts pushing frames to us. Only request if we
+        // haven't received any visualisation frames yet (avoid flooding).
+        if framesReceived == 0 {
+          requestVisualisation()
+        }
       }
     } catch {
       AppLog.warn("msgpack decode failed: \(error) (\(data.count) bytes)")

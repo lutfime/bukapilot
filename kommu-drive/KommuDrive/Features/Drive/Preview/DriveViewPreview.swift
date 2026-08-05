@@ -10,11 +10,16 @@ struct DriveViewPreview: View {
     let vm = DriveSessionViewModel()
     vm.latestFrame = Self.sampleFrame
     vm.settings = DeviceSettings(
-      dongleID: "kommu-test-001", gitCommit: "abc1234",
+      dongleID: "kommu-e2eed9037197a64e", gitCommit: "abc1234",
       currentVersion: "0.10.3", osVersion: "AGNOS 5", state: "enabled",
       isMetric: true, isOffroad: false, localIP: "192.168.1.42",
       activeWlanSSID: "HomeWiFi", networkType: "Wi-Fi", simStatus: "—",
-      enabled: true, sshEnabled: false, updateAvailable: false
+      enabled: true, quietMode: false, experimentalMode: true,
+      alcEnabled: true, ldwEnabled: true, recordFront: false, sshEnabled: false,
+      updateAvailable: false, updaterFetchAvailable: false,
+      updaterTargetBranch: "x70-test", updaterState: "idle",
+      carName: "Proton X70", drivePathOffset: "0", brakeMagGain: nil,
+      wifiList: [], availableBranches: "release3-staging,x70-test"
     )
     vm.framesReceived = 256
     vm._debugInjectIndicators(confidence: 0.82, steering: 0.6)
@@ -53,7 +58,14 @@ struct DriveViewPreview: View {
     dongleId: "kommu-test-001",
     confidence: 0.82,
     steeringLimit: 0.6,
-    vEgo: 18.0
+    vEgo: 18.0,
+    detectedCars: [
+      DetectedCar(x: 45, y: -2.5, probability: 0.7, speed: 16),   // car ahead-right
+      DetectedCar(x: 60, y: 3.0, probability: 0.5, speed: 20),    // car ahead-left
+      DetectedCar(x: 80, y: -1.0, probability: 0.3, speed: 22),   // distant car
+    ],
+    laneLineProbs: [0.9, 0.95, 0.85, 0.7],
+    roadEdgeStds: [0.1, 0.15]
   )
 }
 

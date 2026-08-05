@@ -82,6 +82,24 @@ def extract_model_data(d):
   ):
     for i, item in enumerate(d.get(f"{k}s", []), 1):
       data[f"{p}{i}"] = resample(item) if v else item
+
+  # All detected cars from the model (leadsV3). Each has x[]/y[] time-series;
+  # we ship the current position (first sample), probability, and speed so the
+  # phone can render every car on the road, not just the radar lead.
+  #
+  # Bandwidth guard: BLE Nordic UART tops out at ~15-20 KB/s and the base
+  # visualisation payload is already ~900 bytes/frame. To stay safe on busy
+  # roads, we filter to prob > 0.3 and cap at 3 cars.
+  detected = []
+  for ld in d.get('leadsV3', []):
+    if len(detected) >= 3:
+      break
+    if (prob := ld.get('prob', 0)) > 0.3 and (xs := ld.get('x')) and (ys := ld.get('y')):
+      v = ld.get('v', [0])
+      detected.append({'x': xs[0], 'y': ys[0], 'p': prob, 'v': v[0] if v else 0})
+  if detected:
+    data['cars'] = detected
+
   return data
 
 def safe_get(key, is_bool=False):

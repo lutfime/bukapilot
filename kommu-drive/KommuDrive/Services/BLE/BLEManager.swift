@@ -196,14 +196,34 @@ final class BLEManager: NSObject {
     DispatchQueue.main.async { self.connectionState = .disconnected }
   }
 
-  /// Send a complete msgpack command blob to the RX characteristic.
-  /// The blob should already be unchunked; appbridged reassembles on its side.
-  func send(_ data: Data) {
+  /// Send a msgpack payload to the device on the given channel.
+  ///
+  /// The device's `ChunkReceiver` expects every BLE write to carry a 4-byte
+  /// chunk header: [channel, msgId, totalSegments, segmentIndex] followed by
+  /// up to 240 payload bytes. For payloads ≤ 240 bytes (all our commands), this
+  /// is a single chunk: header = [channel, msgId, 1, 0].
+  func send(_ data: Data, channel: UInt8 = 0x02) {
     guard let p = connectedPeripheral, let rx = rxChar else {
       AppLog.warn("send: not connected / RX char missing")
       return
     }
-    p.writeValue(data, for: rx, type: .withResponse)
+
+    // Build chunked packets. Most commands fit in one 240-byte chunk.
+    let chunkSize = BLEProtocol.maxChunkPayload
+    let totalSegs = UInt8(min(255, (data.count + chunkSize - 1) / chunkSize))
+    let msgId = UInt8.random(in: 1...255)
+
+    for segIdx in 0..<Int(totalSegs) {
+      let offset = segIdx * chunkSize
+      let end = min(offset + chunkSize, data.count)
+      var packet = Data()
+      packet.append(channel)
+      packet.append(msgId)
+      packet.append(totalSegs)
+      packet.append(UInt8(segIdx))
+      packet.append(data.subdata(in: offset..<end))
+      p.writeValue(packet, for: rx, type: .withResponse)
+    }
   }
 
   // MARK: Helpers

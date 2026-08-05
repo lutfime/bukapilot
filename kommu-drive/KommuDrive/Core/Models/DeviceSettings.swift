@@ -1,8 +1,15 @@
 import Foundation
 
+/// One Wi-Fi network from a device scan result.
+struct WifiNetwork: Identifiable, Equatable {
+  let ssid: String
+  let needsPassword: Bool
+  var id: String { ssid }
+}
+
 /// Subset of the `CHANNEL_SETTINGS` msgpack payload.
-/// Mirrors `appbridged.py:send_settings_message`. Only the fields Phase 1 needs are
-/// decoded; the rest are dropped harmlessly.
+/// Mirrors `appbridged.py:send_settings_message`. Only the fields Phase 1/2 needs
+/// are decoded; the rest are dropped harmlessly.
 struct DeviceSettings: Equatable {
   let dongleID: String?
   let gitCommit: String?
@@ -15,20 +22,58 @@ struct DeviceSettings: Equatable {
   let activeWlanSSID: String?
   let networkType: String?
   let simStatus: String?
-  let enabled: Bool           // OpenpilotEnabledToggle
-  let sshEnabled: Bool
+
+  // Software toggles (these are the ones the kommu app shows + can save via saveToggle)
+  let enabled: Bool              // OpenpilotEnabledToggle
+  let quietMode: Bool            // QuietMode
+  let experimentalMode: Bool     // ConditionalExperimentalMode
+  let alcEnabled: Bool           // IsAlcEnabled (auto-lane-centering?)
+  let ldwEnabled: Bool           // IsLdwEnabled (lane departure warning)
+  let recordFront: Bool          // RecordFront (dashcam record driver-facing cam)
+  let sshEnabled: Bool           // SshEnabled
+
+  // Update
   let updateAvailable: Bool
+  let updaterFetchAvailable: Bool
+  let updaterTargetBranch: String?
+  let updaterState: String?
+
+  // Car
+  let carName: String?
+  let drivePathOffset: String?
+  let brakeMagGain: String?
+
+  /// Wi-Fi scan results (transient — only present in the frame after a scan).
+  let wifiList: [WifiNetwork]
+
+  /// Comma-separated list of branches the updater can switch to.
+  let availableBranches: String?
 
   static let empty = DeviceSettings(
     dongleID: nil, gitCommit: nil, currentVersion: nil, osVersion: nil,
     state: nil, isMetric: false, isOffroad: true, localIP: nil,
     activeWlanSSID: nil, networkType: nil, simStatus: nil,
-    enabled: false, sshEnabled: false, updateAvailable: false
+    enabled: false, quietMode: false, experimentalMode: false,
+    alcEnabled: false, ldwEnabled: false, recordFront: false, sshEnabled: false,
+    updateAvailable: false, updaterFetchAvailable: false,
+    updaterTargetBranch: nil, updaterState: nil,
+    carName: nil, drivePathOffset: nil, brakeMagGain: nil,
+    wifiList: [], availableBranches: nil
   )
 
   static func decode(_ raw: [String: Any]) -> DeviceSettings {
     func str(_ k: String) -> String? { raw[k] as? String }
     func bool(_ k: String) -> Bool { (raw[k] as? Bool) ?? ((raw[k] as? Int).map { $0 != 0 }) ?? false }
+
+    let wifiList: [WifiNetwork] = {
+      guard let arr = raw["wifiList"] as? [Any] else { return [] }
+      return arr.compactMap { item -> WifiNetwork? in
+        guard let d = item as? [String: Any], let ssid = d["ssid"] as? String else { return nil }
+        let pw = (d["password"] as? Bool) ?? false
+        return WifiNetwork(ssid: ssid, needsPassword: pw)
+      }
+    }()
+
     return DeviceSettings(
       dongleID: str("dongleID"),
       gitCommit: str("gitCommit"),
@@ -42,8 +87,21 @@ struct DeviceSettings: Equatable {
       networkType: str("networkType"),
       simStatus: str("simStatus"),
       enabled: bool("OpenpilotEnabledToggle"),
+      quietMode: bool("QuietMode"),
+      experimentalMode: bool("ConditionalExperimentalMode"),
+      alcEnabled: bool("IsAlcEnabled"),
+      ldwEnabled: bool("IsLdwEnabled"),
+      recordFront: bool("RecordFront"),
       sshEnabled: bool("SshEnabled"),
-      updateAvailable: bool("UpdateAvailable")
+      updateAvailable: bool("UpdateAvailable"),
+      updaterFetchAvailable: bool("UpdaterFetchAvailable"),
+      updaterTargetBranch: str("UpdaterTargetBranch"),
+      updaterState: str("UpdaterState"),
+      carName: str("CarName"),
+      drivePathOffset: str("DrivePathOffset"),
+      brakeMagGain: str("BrakeMagGain"),
+      wifiList: wifiList,
+      availableBranches: str("UpdaterAvailableBranches")
     )
   }
 }

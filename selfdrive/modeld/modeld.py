@@ -68,8 +68,16 @@ def _use_rknn_driving() -> bool:
 
 def _use_rknn_supercombo() -> bool:
   """Use the fused 0.11 supercombo model. OFF by default — the 0.10 split model is the safe default.
-  Enable with USE_SUPERCOMBO_MODEL=1 AND the .rknn + metadata files present."""
-  if os.getenv('USE_SUPERCOMBO_MODEL', '0') != '1':
+  Enable via the KommuDrive app toggle (writes UseSupercomboModel=1 to Params) OR env var
+  USE_SUPERCOMBO_MODEL=1. Both require the .rknn + metadata files present."""
+  from openpilot.common.params import Params
+  enabled = os.getenv('USE_SUPERCOMBO_MODEL', '0') == '1'
+  if not enabled:
+    try:
+      enabled = Params().get_bool("UseSupercomboModel")
+    except Exception:
+      pass
+  if not enabled:
     return False
   return SUPERCOMBO_RKNN_PATH.exists() and SUPERCOMBO_METADATA_PATH.exists()
 

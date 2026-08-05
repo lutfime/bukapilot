@@ -32,6 +32,7 @@ struct DeviceSettings: Equatable {
   let recordFront: Bool          // RecordFront (dashcam record driver-facing cam)
   let sshEnabled: Bool           // SshEnabled
   let usePidController: Bool     // X70UsePidController (X70 only: PID vs torque lateral controller)
+  let useSupercomboModel: Bool   // UseSupercomboModel (0.11 fused model vs 0.10 split)
 
   // Update
   let updateAvailable: Bool
@@ -56,7 +57,7 @@ struct DeviceSettings: Equatable {
     activeWlanSSID: nil, networkType: nil, simStatus: nil,
     enabled: false, quietMode: false, experimentalMode: false,
     alcEnabled: false, ldwEnabled: false, recordFront: false, sshEnabled: false,
-    usePidController: false,
+    usePidController: false, useSupercomboModel: false,
     updateAvailable: false, updaterFetchAvailable: false,
     updaterTargetBranch: nil, updaterState: nil,
     carName: nil, drivePathOffset: nil, brakeMagGain: nil,
@@ -96,6 +97,7 @@ struct DeviceSettings: Equatable {
       recordFront: bool("RecordFront"),
       sshEnabled: bool("SshEnabled"),
       usePidController: bool("X70UsePidController"),
+      useSupercomboModel: bool("UseSupercomboModel"),
       updateAvailable: bool("UpdateAvailable"),
       updaterFetchAvailable: bool("UpdaterFetchAvailable"),
       updaterTargetBranch: str("UpdaterTargetBranch"),

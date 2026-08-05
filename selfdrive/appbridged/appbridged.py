@@ -380,7 +380,7 @@ class AppBridge:
     bool_keys = {
       'OpenpilotEnabledToggle', 'QuietMode', 'IsAlcEnabled', 'IsLdwEnabled',
       'SshEnabled', 'ConditionalExperimentalMode', 'RecordFront', 'UpdateAvailable',
-      'UpdaterFetchAvailable'
+      'UpdaterFetchAvailable', 'UseSupercomboModel'
     }
     string_keys = {
       'FeaturesPackage', 'CarName', 'UpdaterTargetBranch',

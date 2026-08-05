@@ -37,6 +37,25 @@ struct ConnectionView: View {
             .foregroundStyle(.secondary)
             .textCase(nil)
         }
+
+        // Fallback: show every nearby device if the KA2 wasn't auto-matched.
+        if viewModel.ble.showAllDevices && !viewModel.ble.otherPeripherals.isEmpty {
+          Section {
+            ForEach(viewModel.ble.otherPeripherals) { peripheral in
+              Button {
+                viewModel.connect(to: peripheral.id)
+              } label: {
+                peripheralRow(peripheral)
+              }
+              .buttonStyle(.plain)
+            }
+          } header: {
+            Text("All nearby devices")
+              .font(.system(size: 12, weight: .semibold))
+              .foregroundStyle(.secondary)
+              .textCase(nil)
+          }
+        }
       }
       .listStyle(.plain)
       .scrollContentBackground(.hidden)
@@ -105,10 +124,23 @@ struct ConnectionView: View {
       Text("No devices found yet")
         .font(.system(size: 14, weight: .medium))
         .foregroundStyle(.secondary)
-      Text("Make sure your KA2 is powered on and nearby.")
+      Text("Make sure your KA2 is powered on and nearby, and that the kommu app isn't already connected to it (BLE allows only one connection at a time).")
         .font(.system(size: 12))
         .foregroundStyle(.tertiary)
         .multilineTextAlignment(.center)
+        .padding(.horizontal, 24)
+
+      // Show-all fallback: if auto-match misses your device, surface everything
+      // nearby so you can pick it manually.
+      Button {
+        viewModel.ble.showAllDevices = true
+      } label: {
+        Label("Show all nearby devices", systemImage: "list.bullet")
+          .font(.system(size: 13, weight: .semibold))
+      }
+      .buttonStyle(.bordered)
+      .tint(.white)
+      .opacity(viewModel.ble.showAllDevices ? 0 : 1)
     }
     .frame(maxWidth: .infinity)
     .padding(.vertical, 32)

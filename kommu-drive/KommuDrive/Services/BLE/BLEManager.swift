@@ -24,9 +24,26 @@ final class BLEManager: NSObject {
     let id: UUID
     let name: String
     let rssi: Int
+    /// True if we matched on UART service or a KA2-style name; false if it's a
+    /// generic nearby device surfaced by the "show all" fallback.
+    var likelyKA2: Bool = true
   }
 
+  /// Names we never want to show as connection candidates.
+  private static let ignoredNames: Set<String> = [
+    "n/a", "unknown", ""
+  ]
+
   // MARK: Internals
+
+  /// When true, the connection screen also lists every nearby device (not just
+  /// ones we heuristically flagged as KA2). Flip this on if auto-match misses
+  /// your device — you'll see its real advertised name and can tap to connect.
+  @Published var showAllDevices: Bool = false
+
+  /// Devices seen during the current scan that didn't match KA2 heuristics.
+  /// Surfaced only when `showAllDevices` is on.
+  @Published private(set) var otherPeripherals: [DiscoveredPeripheral] = []
 
   private let centralQueue = DispatchQueue(label: "kommu.ble.central")
   private var central: CBCentralManager!
@@ -60,7 +77,15 @@ final class BLEManager: NSObject {
 
   // MARK: Public API
 
-  /// Begin scanning for peripherals advertising the Nordic UART service.
+  /// Begin scanning for the KA2 device.
+  ///
+  /// The device advertises with `local_name = hostname` (e.g. "kommu-ka2-xxxx")
+  /// but does **not** include the Nordic UART service UUID in its advertisement
+  /// packet — it's only discoverable after connecting. (The kommu app scans the
+  /// same way.) So we scan with no service filter and match candidates by:
+  ///   (a) advertised UART service UUID, OR
+  ///   (b) a hostname-style name (contains "kommu" or "ka2"), OR
+  ///   (c) no filter at all in debug so we can see everything nearby.
   func startScan() {
     guard central.state == .poweredOn else {
       AppLog.warn("BLE not powered on (state=\(central.state.rawValue)); will scan when ready")
@@ -69,11 +94,13 @@ final class BLEManager: NSObject {
     }
     DispatchQueue.main.async { self.connectionState = .scanning }
     discoveredPeripherals.removeAll()
+    otherPeripherals.removeAll()
+    // No service filter — device doesn't advertise UART in its packet.
     central.scanForPeripherals(
-      withServices: [BLEProtocol.uartService],
+      withServices: nil,
       options: [CBCentralManagerScanOptionAllowDuplicatesKey: false]
     )
-    AppLog.info("BLE scan started")
+    AppLog.info("BLE scan started (no service filter)")
   }
 
   func stopScan() {
@@ -82,8 +109,11 @@ final class BLEManager: NSObject {
   }
 
   /// Connect to a discovered peripheral by identifier.
+  /// Looks in both the KA2 candidates list and the "other" fallback list.
   func connect(to id: UUID) {
-    guard let peripheral = discoveredPeripherals.first(where: { $0.id == id }) else {
+    let peripheral = discoveredPeripherals.first(where: { $0.id == id })
+                ?? otherPeripherals.first(where: { $0.id == id })
+    guard let peripheral else {
       AppLog.warn("connect: peripheral \(id) not in discovered list")
       return
     }
@@ -154,11 +184,35 @@ extension BLEManager: CBCentralManagerDelegate {
                       didDiscover peripheral: CBPeripheral,
                       advertisementData: [String: Any],
                       rssi RSSI: NSNumber) {
-    let name = peripheral.name ?? (advertisementData[CBAdvertisementDataLocalNameKey] as? String) ?? "Unknown KA2"
-    let entry = DiscoveredPeripheral(id: peripheral.identifier, name: name, rssi: RSSI.intValue)
+    let name = (advertisementData[CBAdvertisementDataLocalNameKey] as? String)
+              ?? peripheral.name
+              ?? "Unknown"
+    let services = (advertisementData[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID]) ?? []
+    let serviceUUIDs = services.map { $0.uuidString }
+
+    // Always log so we can see what's actually nearby when debugging.
+    AppLog.debug("discovered: name=\(name) rssi=\(RSSI.intValue) services=\(serviceUUIDs) id=\(peripheral.identifier.uuidString.prefix(8))")
+
+    // Candidate if: advertises UART, OR name looks like a KA2/kommu hostname,
+    // OR has a non-generic name (the device hostname is often a serial-ish
+    // string like "lp-..." that doesn't contain "kommu").
+    let advertisesUART = services.contains(where: { $0 == BLEProtocol.uartService })
+    let lower = name.lowercased()
+    let looksLikeKA2 = lower.contains("kommu") || lower.contains("ka2")
+    let isGeneric = Self.ignoredNames.contains(lower)
+    let likelyKA2 = (advertisesUART || looksLikeKA2) && !isGeneric
+
+    let entry = DiscoveredPeripheral(id: peripheral.identifier, name: name,
+                                     rssi: RSSI.intValue, likelyKA2: likelyKA2)
     DispatchQueue.main.async {
-      if !self.discoveredPeripherals.contains(where: { $0.id == entry.id }) {
-        self.discoveredPeripherals.append(entry)
+      if likelyKA2 {
+        if !self.discoveredPeripherals.contains(where: { $0.id == entry.id }) {
+          self.discoveredPeripherals.append(entry)
+        }
+      } else if !isGeneric {
+        if !self.otherPeripherals.contains(where: { $0.id == entry.id }) {
+          self.otherPeripherals.append(entry)
+        }
       }
     }
   }

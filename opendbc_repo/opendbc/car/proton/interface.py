@@ -32,7 +32,7 @@ class CarInterface(CarInterfaceBase):
 
     ret.steerControlType = car.CarParams.SteerControlType.torque
     ret.steerLimitTimer = 0.1
-    ret.steerActuatorDelay = 0.30
+    ret.steerActuatorDelay = 0.30          # default; X70 overrides below
 
     ret.lateralTuning.init("pid")
 
@@ -54,6 +54,24 @@ class CarInterface(CarInterfaceBase):
     elif candidate == CAR.PROTON_S70:
       ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0.0], [530]]
     elif candidate == CAR.PROTON_X70:
+      ret.steerActuatorDelay = 0.17  # measured ~170ms (cmd vs actual steer angle, full-rate rlog); KA1 had 0.13
+      # Lateral controller: torque (self-tuning via locationd/torqued) instead of PID.
+      # Seed: was override.toml [2.5, 2.5, 0.1] (latAccelFactor, maxLatAccel, friction).
+      # torqued refines online ('proton' now in ALLOWED_CARS); it measured raw latAccelFactor~1.37
+      # and latAccelOffset~-0.09 but wouldn't commit (override-starved + 2.5 seed pinned the learn band high).
+      # Seed near measured: factor 1.5 (room to learn up), offset -0.09 cancels the steady right pull.
+      ret.lateralTuning.init("torque")
+      ret.lateralTuning.torque.latAccelFactor = 1.5
+      ret.lateralTuning.torque.friction = 0.1
+      ret.lateralTuning.torque.latAccelOffset = -0.09
+      ret.lateralTuning.torque.steeringAngleDeadzoneDeg = 0.0
+      # Longitudinal: restore release_ka2 gains. x70-ka2/staging had zeroed kp/ki (base default [0.])
+      # -> pure feedforward, no feedback correction. release_ka2 X70 used these (proven on this car).
+      ret.longitudinalTuning.kpBP = [0.0, 5.0, 20.0]
+      ret.longitudinalTuning.kpV  = [0.7, 0.5, 0.4]
+      ret.longitudinalTuning.kiBP = [0.0, 5.0, 20.0]
+      ret.longitudinalTuning.kiV  = [0.2, 0.15, 0.1]
+      ret.longitudinalActuatorDelay = 0.45  # release_ka2 used 0.4-0.5; x70-ka2 base was 0.6
       ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0.0], [500]]
     elif candidate == CAR.PROTON_X90:
       ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0.0], [256]]

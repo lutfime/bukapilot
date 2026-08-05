@@ -64,11 +64,10 @@ def _use_rknn_driving() -> bool:
     return False
   return os.getenv('USE_RKNN', '1') != '0'
 
-LAT_SMOOTH_SECONDS = 0.0
+LAT_SMOOTH_SECONDS = 0.2  # Kommu X70: RKNN-ported model emits noisier curvature than comma's ref model; smooth to damp highway steering wobble (comma ships 0.0). Tune 0.1-0.4.
 LONG_SMOOTH_SECONDS = 0.3
 MIN_LAT_CONTROL_SPEED = 0.3
-# When the 0.11 supercombo model (with action head) is active, apply slightly more
-# curvature smoothing (matches upstream 0.11). The legacy 0.10 path keeps 0.0 (stock).
+# When the 0.11 supercombo model (with action head) is active, apply upstream 0.11's value.
 LAT_SMOOTH_SECONDS_011 = 0.1
 
 DRIVE_PATH_OFFSET_LIMIT_M = 0.25

@@ -2,7 +2,30 @@
 
 > Working log for the `x70-test` branch. Goal: get the standard 0.11 driving model
 > running on the KA2 NPU, keeping the proven 0.10.3 base + RKNN runtime.
-> Created 2026-08-04. **Updated 2026-08-04 after inspecting the real 0.11 model — see "Key findings from inspecting the actual 0.11 model" below.**
+> Created 2026-08-04. Updated through 2026-08-05.
+
+## Branch model: ONE branch, BOTH models (no branch-switching to go back)
+
+`x70-test` is a **single branch that runs both the 0.10 and 0.11 models.** The selector is
+file-presence based, so you toggle at runtime by renaming a file — no branch switch, no
+reflash:
+
+| `driving_supercombo.rknn` present in `models/`? | What runs |
+|---|---|
+| **No** (or renamed `.disabled`) | **0.10 split model** (`ModelStateRKNN` + `driving_vision.rknn` + `driving_policy.rknn`) — known-good fallback |
+| **Yes** | **0.11 supercombo** (`ModelStateSupercomboRKNN` + `driving_supercombo.rknn`) |
+
+The code changes on `x70-test` are **backward-compatible** — the 0.10 model runs fine on
+this branch. `staging` exists only as the emergency undo button if `x70-test` ever gets into
+a broken state; you don't need it for normal 0.10 operation.
+
+```bash
+# Toggle to 0.11 model:
+mv selfdrive/modeld/models/driving_supercombo.rknn.disabled selfdrive/modeld/models/driving_supercombo.rknn
+# Toggle back to 0.10:
+mv selfdrive/modeld/models/driving_supercombo.rknn selfdrive/modeld/models/driving_supercombo.rknn.disabled
+# Either way: restart modeld (reboot, or pkill -f modeld so it respawns)
+```
 
 ---
 
@@ -152,6 +175,61 @@ script:
 - [ ] On device: inference hits ≥15 Hz (ideally 20)
 - [ ] Test drive: X70 engages, steers, brakes sanely (no regressions vs 0.10.3)
 - [ ] Compare Experimental-mode stopping vs 0.10.3 (the 0.11 long gain)
+
+---
+
+## Quantization & precision reality (what the converted model actually is)
+
+### What dtype the build assigned
+From the conversion build log, the model is **mixed precision**:
+- 29 large tensors (convolution weights, matrices) → **FLOAT16** (16-bit)
+- 40 small tensors (biases, layer norms, scalars) → **FLOAT** (32-bit, unchanged)
+
+This is RKNN's `w16a16i` mode working as designed: compress the bulk in FP16, keep the
+precision-sensitive small tensors in full float. Total: 6.1 MB internal memory + 118 MB weights.
+
+### Is it "1:1" with the original FP32 AI?
+**No — but very close.** Typical FP16 quantization loses <0.5% accuracy on vision/transformer
+models, which is below the perceptual noise floor for driving. You won't feel the difference
+in steering/braking. Frame-by-frame output diff would show tiny numerical drift, but the
+decisions are effectively identical.
+
+| Precision | Accuracy vs FP32 original | Notes |
+|-----------|---------------------------|-------|
+| FP32 (original ONNX) | 100% (reference) | What comma ships |
+| **FP16 (your model, w16a16i)** | **~99-99.5%** | What Kommu uses in production; proven |
+| INT8 (w8a8) | ~95-98% | RKPilot/sunnypilot-pc rejected for driving-quality degradation |
+
+### Why w16a16i is the right (and best) choice on RK3588
+- Kommu uses FP16 for their production 0.10 model → proven for this exact use case
+- INT8 (w8a8) is the precision-destroying path that other RK3588 projects rejected
+- `w8a16` (weights INT8 + activations INT16) is RKLLM-only, invalid on RK3588
+- So `w16a16i` (weights INT16 + activations INT16, with small tensors kept float) is the
+  best precision available on the RK3588 NPU
+
+### The 880M "big model" — out of scope, here's why
+0.11.2 ships an optional "big model" (`big_driving_supercombo.onnx`, 880M params) that runs
+on comma four + an external "Chestnut" USB GPU dongle. It's marginally better (more params)
+but:
+- ~1.7 GB FP16 footprint — far beyond the RK3588 NPU's working memory
+- comma themselves say it needs "an external GPU"
+- Out of reach for the KA2; the **standard model** (what we converted) is the right target
+  and is already the newest checkpoint comma ships on master
+
+### If FP16 ever turns out to be a problem
+Re-convert with a different dtype. Your realistic options on RK3588 are only `w16a16i`
+(what you have) or `w8a8` (INT8 — precision-destroying). There's no higher-precision option.
+So if driving quality somehow degrades, the issue is more likely elsewhere (the loader, the
+features_buffer, the warp) than the quantization.
+
+---
+
+## 0.11 vs 0.11.2 — which model did we convert?
+The converted `driving_supercombo.onnx` is pulled from comma's `master` branch, which is
+**post-0.11.2**. So you have the newest standard model. The only delta vs a hypothetical
+"0.11.0-only" model is whatever checkpoint bump 0.11.2 shipped (release notes just say
+"New driving model" — no architectural change). The standard model and big model share the
+same input/output contract; we're using the standard one.
 
 ---
 

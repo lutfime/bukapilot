@@ -57,12 +57,21 @@ VISION_METADATA_PATH = MODEL_DIR / 'driving_vision_metadata.pkl'
 POLICY_METADATA_PATH = MODEL_DIR / 'driving_policy_metadata.pkl'
 VISION_RKNN_PATH = MODEL_DIR / os.getenv("RKNN_VISION_MODEL", "driving_vision.rknn")
 POLICY_RKNN_PATH = MODEL_DIR / os.getenv("RKNN_POLICY_MODEL", "driving_policy.rknn")
+SUPERCOMBO_RKNN_PATH = MODEL_DIR / os.getenv("RKNN_SUPERCOMBO_MODEL", "driving_supercombo.rknn")
+SUPERCOMBO_METADATA_PATH = MODEL_DIR / 'driving_supercombo_metadata.pkl'
 
 def _use_rknn_driving() -> bool:
   """Use RKNN for driving model when configured .rknn files exist (default). Set USE_RKNN=0 to force tinygrad."""
   if not (VISION_RKNN_PATH.exists() and POLICY_RKNN_PATH.exists()):
     return False
   return os.getenv('USE_RKNN', '1') != '0'
+
+def _use_rknn_supercombo() -> bool:
+  """Use the fused 0.11 supercombo model. OFF by default — the 0.10 split model is the safe default.
+  Enable with USE_SUPERCOMBO_MODEL=1 AND the .rknn + metadata files present."""
+  if os.getenv('USE_SUPERCOMBO_MODEL', '0') != '1':
+    return False
+  return SUPERCOMBO_RKNN_PATH.exists() and SUPERCOMBO_METADATA_PATH.exists()
 
 LAT_SMOOTH_SECONDS = 0.2  # Kommu X70: RKNN-ported model emits noisier curvature than comma's ref model; smooth to damp highway steering wobble (comma ships 0.0). Tune 0.1-0.4.
 LONG_SMOOTH_SECONDS = 0.3
@@ -574,6 +583,102 @@ class ModelStateRKNN:
     return combined_outputs_dict
 
 
+class ModelStateSupercomboRKNN:
+  """Driving model state for the fused 0.11 supercombo model on RKNN (single .rknn).
+
+  Reuses bukapilot's OpenCL warp machinery (DrivingModelFrame) for the camera inputs,
+  but runs a single fused model (vision+policy combined) via DrivingSupercomboRKNNRunner.
+  Reads all input/output shapes from the model metadata (no hardcoded 25/24/etc).
+  """
+
+  def __init__(self, context: CLContext):
+    # Load metadata — shapes come from the model itself, not hardcoded
+    with open(SUPERCOMBO_METADATA_PATH, 'rb') as f:
+      meta = pickle.load(f)
+    self.input_shapes = meta['input_shapes']
+    self.output_slices = meta['output_slices']
+    self._output_size = int(np.prod(meta['output_shapes']['outputs']))
+    self.vision_input_names = [k for k in self.input_shapes if 'img' in k]  # ['img', 'big_img']
+    self._vector_input_names = [k for k in self.input_shapes if k not in self.vision_input_names]
+    # Load the runner (committed: runners/driving_supercombo_rknn.py)
+    from openpilot.selfdrive.modeld.runners.driving_supercombo_rknn import DrivingSupercomboRKNNRunner
+    self._rknn = DrivingSupercomboRKNNRunner(MODEL_DIR)
+    # OpenCL warp frames — same as ModelStateRKNN
+    self.frames = {
+      name: DrivingModelFrame(context, ModelConstants.MODEL_RUN_FREQ // ModelConstants.MODEL_CONTEXT_FREQ)
+      for name in self.vision_input_names
+    }
+    self.prev_desire = np.zeros(ModelConstants.DESIRE_LEN, dtype=np.float32)
+    # Vector inputs (desire_pulse, traffic_convention, action_t, features_buffer) — shapes from metadata
+    self.numpy_inputs = {
+      k: np.zeros(self.input_shapes[k], dtype=np.float32)
+      for k in self._vector_input_names
+    }
+    # Temporal context queue for features_buffer (produces N frames; runner truncates to model's expected count)
+    self.full_input_queues = InputQueues(
+      ModelConstants.MODEL_CONTEXT_FREQ, ModelConstants.MODEL_RUN_FREQ, ModelConstants.N_FRAMES
+    )
+    for k in ['desire_pulse', 'features_buffer']:
+      if k in self.numpy_inputs:
+        self.full_input_queues.update_dtypes_and_shapes(
+          {k: self.numpy_inputs[k].dtype}, {k: self.numpy_inputs[k].shape}
+        )
+    self.full_input_queues.reset()
+    self.flat_output = np.zeros(self._output_size, dtype=np.float32)
+    self.parser = Parser()
+
+  def slice_outputs(self, model_outputs: np.ndarray, output_slices: dict[str, slice]) -> dict[str, np.ndarray]:
+    return {k: model_outputs[np.newaxis, v] for k, v in output_slices.items()}
+
+  def run(self, bufs: dict[str, VisionBuf], transforms: dict[str, np.ndarray],
+          inputs: dict[str, np.ndarray], prepare_only: bool, frame_id: int | None = None) -> dict[str, np.ndarray] | None:
+    # desire rising-edge pulse (same as ModelStateRKNN)
+    inputs['desire_pulse'][0] = 0
+    new_desire = np.where(inputs['desire_pulse'] - self.prev_desire > .99, inputs['desire_pulse'], 0)
+    self.prev_desire[:] = inputs['desire_pulse']
+
+    # OpenCL warp (reuse bukapilot's machinery)
+    imgs_cl = {name: self.frames[name].prepare(bufs[name], transforms[name].flatten()) for name in self.vision_input_names}
+    img_np = self.frames['img'].buffer_from_cl(imgs_cl['img']).reshape(self.input_shapes['img'])
+    big_img_np = self.frames['big_img'].buffer_from_cl(imgs_cl['big_img']).reshape(self.input_shapes['big_img'])
+
+    if prepare_only:
+      return None
+
+    # action_t is NEW vs 0.10 — built by main() and passed in inputs.
+    # Falls back to zeros if main() hasn't been updated to provide it (safe).
+    action_t = inputs.get('action_t', np.zeros(self.input_shapes.get('action_t', (1, 2)), dtype=np.float32))
+
+    # Run the single fused model (vision+policy in one RKNN call)
+    self.flat_output = self._rknn.run(
+      img_np, big_img_np,
+      self.numpy_inputs.get('desire_pulse', np.zeros(self.input_shapes.get('desire_pulse', (1, 25, 8)), dtype=np.float32)),
+      self.numpy_inputs.get('traffic_convention', np.zeros(self.input_shapes.get('traffic_convention', (1, 2)), dtype=np.float32)),
+      action_t,
+      self.numpy_inputs.get('features_buffer', np.zeros(self.input_shapes.get('features_buffer', (1, 24, 512)), dtype=np.float32)),
+    ).reshape(-1)
+
+    # Slice + parse the flat output (reuses the same Parser as the split path)
+    outputs_dict = self.parser.parse_outputs(self.slice_outputs(self.flat_output, self.output_slices))
+
+    # Feed hidden_state back into features_buffer for next frame (temporal context).
+    # The runner truncates to the model's expected features_buffer shape internally.
+    if 'hidden_state' in outputs_dict and 'features_buffer' in self.numpy_inputs:
+      self.full_input_queues.enqueue({'features_buffer': outputs_dict['hidden_state'], 'desire_pulse': new_desire})
+      for k in ['desire_pulse', 'features_buffer']:
+        if k in self.numpy_inputs:
+          self.numpy_inputs[k][:] = self.full_input_queues.get(k)[k]
+    if 'traffic_convention' in self.numpy_inputs:
+      self.numpy_inputs['traffic_convention'][:] = inputs['traffic_convention']
+    if 'action_t' in self.numpy_inputs:
+      self.numpy_inputs['action_t'][:] = action_t
+
+    if SEND_RAW_PRED:
+      outputs_dict['raw_pred'] = self.flat_output.copy()
+
+    return outputs_dict
+
+
 def main(demo=False):
   cloudlog.warning("modeld init")
   if demo and KA2:
@@ -591,7 +696,10 @@ def main(demo=False):
   if KA2 and not USBGPU:
     set_external_cl_context(cl_context.context_ptr, cl_context.device_id_ptr, cl_context.queue_ptr)
   cloudlog.warning("CL context ready; loading model")
-  if _use_rknn_driving():
+  if _use_rknn_supercombo():
+    cloudlog.warning("using RKNN supercombo runner (0.11 fused model: %s)", SUPERCOMBO_RKNN_PATH.name)
+    model = ModelStateSupercomboRKNN(cl_context)
+  elif _use_rknn_driving():
     cloudlog.warning("using RKNN driving runner (vision=%s policy=%s); inputs cast to float16", VISION_RKNN_PATH.name, POLICY_RKNN_PATH.name)
     model = ModelStateRKNN(cl_context)
   else:
@@ -742,9 +850,13 @@ def main(demo=False):
 
     bufs = {name: buf_extra if 'big' in name else buf_main for name in model.vision_input_names}
     transforms = {name: model_transform_extra if 'big' in name else model_transform_main for name in model.vision_input_names}
+    # action_t is consumed only by the 0.11 supercombo model; the 0.10 split model ignores it.
+    frame_delay = DT_MDL  # compensate for time passed since the frame was captured
+    action_delay = DT_MDL / 2  # middle of the interval between model output and next frame
     inputs:dict[str, np.ndarray] = {
       'desire_pulse': vec_desire,
       'traffic_convention': traffic_convention,
+      'action_t': np.array([lat_delay + frame_delay + action_delay, long_delay + frame_delay + action_delay], dtype=np.float32),
     }
 
     mt1 = time.perf_counter()

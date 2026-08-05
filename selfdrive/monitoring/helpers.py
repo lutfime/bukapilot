@@ -39,7 +39,10 @@ class DRIVER_MONITOR_SETTINGS:
     self._SG_THRESHOLD = 0.9
     self._BLINK_THRESHOLD = 0.865
 
-    self._PHONE_THRESH = 0.75 if device_type == 'mici' else 0.4
+    # phoneProb threshold for "on phone" distraction. KA2's RKNN-ported DM model has a
+    # biased-high baseline (median phoneProb ~0.38 when NOT on phone), so 0.4 falsely flagged
+    # ~46% of frames. 0.70 cuts that to ~6% while still catching real phone use. (mici keeps 0.75.)
+    self._PHONE_THRESH = 0.75 if device_type == 'mici' else 0.70 if device_type == 'ka2' else 0.4
     self._PHONE_THRESH2 = 15.0
     self._PHONE_MAX_OFFSET = 0.06
     self._PHONE_MIN_OFFSET = 0.025

@@ -162,7 +162,9 @@ class AppBridge:
     self.sm = sm if sm else messaging.SubMaster([
       'modelV2', 'selfdriveState', 'radarState', 'liveCalibration',
       'driverMonitoringState', 'carState',
-      'uploaderState'
+      'uploaderState',
+      # added for confidence ball + steering limit indicator (KommuDrive):
+      'controlsState', 'liveParameters'
     ])
     self.rk = Ratekeeper(MESSAGE_HZ) # Ratekeeper for loop
     self.last_periodic_time = 0 # Track last periodic task
@@ -263,7 +265,39 @@ class AppBridge:
     data["t"] = extract_lead(rd, "leadTwo")
     update_dict_from_sm(data, sm['driverMonitoringState'], ["isActiveMode"])
     data["h"] = sm['liveCalibration'].to_dict().get("height", [None])[0]
-    update_dict_from_sm(data, sm['carState'], ["vEgoCluster", "vCruiseCluster"])
+    update_dict_from_sm(data, sm['carState'], ["vEgoCluster", "vCruiseCluster", "vEgo"])
+
+    # --- confidence ball + steering limit indicator (KommuDrive) ---
+    # confidence: (1 - max(brakeDisengageProbs)) * (1 - max(steerOverrideProbs))
+    # matches confidence_ball.py:34-36 on the device UI.
+    dp = sm['modelV2'].meta.disengagePredictions
+    brake_p = max(dp.brakeDisengageProbs) if len(dp.brakeDisengageProbs) else 1.0
+    steer_p = max(dp.steerOverrideProbs) if len(dp.steerOverrideProbs) else 1.0
+    data["cf"] = (1.0 - brake_p) * (1.0 - steer_p)
+
+    # steering limit: lateral accel fraction in [-1, 1].
+    # matches torque_bar.py:163-174 (angleState path). Units: g ≈ 9.81 m/s^2.
+    # Fields are read defensively so a missing lateralControlState doesn't crash.
+    cs = sm['controlsState']
+    car_state = sm['carState']
+    live_params = sm['liveParameters']
+    try:
+      if cs.lateralControlState.which() == 'angleState':
+        G = 9.81
+        max_lat_accel = 3.0  # TODO: pull from CarParams (matches torque_bar.py)
+        lat_accel = cs.curvature * (car_state.vEgo ** 2) - live_params.roll * G
+        actual = cs.curvature * (car_state.vEgo ** 2)
+        desired = cs.desiredCurvature * (car_state.vEgo ** 2)
+        accel_diff = desired - actual
+        data["sl"] = max(-1.0, min(1.0, lat_accel / max_lat_accel + accel_diff))
+      else:
+        # Non-angleState controllers (e.g. torque-based): fall back to 0 so the
+        # arc stays hidden. carOutput isn't SubMaster'd here, so we don't try to
+        # read raw torque — the phone only needs the normalized fraction.
+        data["sl"] = 0.0
+    except Exception:
+      data["sl"] = 0.0
+
     data = quantize(data)
     try:
       self.ble.chunk_and_send(CHANNEL_VISUALISATION, msgpack.packb(data))

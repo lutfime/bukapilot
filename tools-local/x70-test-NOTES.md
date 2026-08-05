@@ -428,3 +428,149 @@ git branch -D x70-test # if you want to discard
 ```
 The old 0.10.3 `.rknn` models and runtime are untouched — the code changes are
 backward-compatible (legacy path still active when no `action` head is present).
+
+---
+
+## ⚠️ PRIVACY: custom code + model swaps leak to kommu in every uploaded log (2026-08-05)
+
+Investigated what data `system/loggerd/uploader.py` ships to `web.kommu.ai` while driving.
+**Answer: yes — your branch name, commit, fork URL, and full `git diff` of uncommitted
+changes are embedded in every uploaded `qlog`/`rlog`.**
+
+### How it gets in the log
+`system/loggerd/logger.cc:48-64` builds an `InitData` record at the start of every route and
+writes it into both rlog and qlog. It snapshots **all of Params** into the log:
+
+```c
+init.setGitCommit(params_map["GitCommit"]);     // your commit hash
+init.setGitCommitDate(params_map["GitCommitDate"]);
+init.setGitBranch(params_map["GitBranch"]);     // "x70-test"
+init.setGitRemote(params_map["GitRemote"]);     // your fork's origin URL
+auto lparams = init.initParams().initEntries(params_map.size());
+for (auto& [key, value] : params_map) {
+  if ( !(params.getKeyFlag(key) & DONT_LOG) ) {  // ← only DONT_LOG keys filtered
+    // ...key + value written into the log
+  }
+}
+```
+
+### The hole: only 3 keys are protected
+In `common/params_keys.h`, of ~155 Params keys, **only 3 have `DONT_LOG`**:
+- `AccessToken`
+- `LiveTorqueParameters`
+- `SecOCKey`
+
+Everything else — including all git/model fields below — is serialized into the log and
+uploaded by default (`qlog.zst` + `qcamera.ts` every segment; full `rlog`+videos on demand).
+
+### What specifically exposes this branch's work
+| Param key | What it reveals | Written by |
+|---|---|---|
+| `GitBranch` | `x70-test` | `system/manager/manager.py:61` |
+| `GitCommit` | exact commit hash | `manager.py:59` |
+| `GitCommitDate` | commit timestamp | `manager.py:60` |
+| `GitRemote` | your fork's origin URL (exposes your GitHub repo) | `manager.py:62` |
+| **`GitDiff`** | **literal `git diff --submodule=diff` of uncommitted changes** — modeld edits, RKNN conversion scripts, supercombo runner changes, etc. | `system/updated/updated.py:200-201` |
+| `GithubUsername` | your GitHub handle (if SSH keys set up) | `setup_ssh_keys.py` / UI |
+| `Version` | openpilot version string | `manager.py:58` |
+
+`GitDiff` is the worst: `updated.py:200` runs `git diff --submodule=diff` on the overlay and
+dumps the **full text diff** into Params, which then rides along in every uploaded log. So
+the modeld/supercombo edits on this branch can land at kommu as plaintext.
+
+### Model swap is also visible through the data itself, not just metadata
+- `npuDriverVersion` field (`cereal/log.capnp:491`, written by modeld) → RKNN runtime version
+- `modelV2` outputs — a 0.11 supercombo produces different plan/lane/desire distributions than
+  0.10.3, so anyone analyzing the qlog can tell it's not stock
+- `bootlog`/crash logs carry the same git metadata
+
+### Fix options (NOT applied yet — recorded for later)
+1. **Cleanest:** add `DONT_LOG` to the sensitive keys in `common/params_keys.h` (needs C++ rebuild):
+   ```c
+   {"GitDiff",       {PERSISTENT | DONT_LOG, STRING}},
+   {"GitRemote",     {PERSISTENT | DONT_LOG, STRING}},
+   {"GitBranch",     {PERSISTENT | DONT_LOG, STRING}},
+   {"GithubUsername",{PERSISTENT | DONT_LOG, STRING}},
+   ```
+2. **Disable uploads:** `FAKEUPLOAD=1` env var (`uploader.py:262-263` returns FakeResponse, no
+   bytes leave the device), or stop the `uploader` process.
+3. **Network block:** firewall `web.kommu.ai`.
+
+---
+
+## 📱 Kommu phone-app BLE protocol — reference for building a custom app (2026-08-05)
+
+The kommu phone app talks to the KA2 over **Bluetooth LE** via `selfdrive/appbridged/`.
+This is fully on-device and self-contained — **no kommu cloud involved in the BT path** — so a
+custom replacement app is very feasible. The protocol is simple and documented below.
+
+### Architecture
+```
+[Phone app] <--BLE GATT--> [appbridged.py] --cereal messaging--> [openpilot services]
+                              ^
+                              +-- bluezero (Linux BLE peripheral via D-Bus/BlueZ)
+```
+- Registered as a managed process: `system/manager/process_config.py:81`
+  `PythonProcess("appbridged", "selfdrive.appbridged.appbridged", always_run, enabled=not PC)`
+- Always running on the KA2 (not just on-road).
+
+### BLE profile (`selfdrive/appbridged/ble_helper.py`)
+- **Nordic UART Service** UUID: `6E400001-B5A3-F393-E0A9-E50E24DCCA9E`
+- **RX char** (phone → device, write): `6E400002-...`
+- **TX char** (device → phone, notify): `6E400003-...`
+- Device advertises as peripheral with `local_name = hostname`, appearance `963`.
+- Chunking: 240-byte chunks with a 4-byte header `[channel, msgId, totalSegs, segIdx]`.
+  Reassembly + 1.0s timeout for incomplete messages is in `ChunkReceiver`.
+
+### Wire format = **msgpack** (`appbridged.py`)
+Two logical channels:
+- `CHANNEL_VISUALISATION = 0x01` — live driving data, ~16 Hz
+- `CHANNEL_SETTINGS = 0x02` — settings state (~3 Hz) + command/response
+
+**Device → phone (visualisation)** `send_visualisation_message`:
+modelV2 path/lane/edge resampled, leadOne/leadTwo (status, dRel, yRel), selfdriveState
+(enabled, state, experimentalMode, alert*, personality), driverMonitoringState.isActiveMode,
+liveCalibration.height, carState.vEgoCluster/vCruiseCluster, isMetric, dongleId.
+
+**Device → phone (settings)** `send_settings_message`:
+dongleID, gitCommit, currentVersion, osVersion, state, IsMetric, localIP, activeWlanSSID,
+hotspotEnabled/Ip, networkType, simStatus, remainingDataUpload, carNames (×3 on connect),
+wifiList (after scan), plus bool/string Params (OpenpilotEnabledToggle, QuietMode, SshEnabled,
+CarName, UpdaterTargetBranch, GithubUsername, GsmApn, DrivePathOffset, …).
+
+**Phone → device (commands)** `apply_settings_message`, keyed by `msgType`:
+| msgType | Action |
+|---|---|
+| `saveToggle` | write bool Params |
+| `saveConfig` | set CarName / FeaturesPackage / GsmApn / BrakeMagGain + string Params |
+| `resetCalibration` | clear CalibrationParams + Live* params |
+| `reboot` | `DoReboot` (only when disabled) |
+| `tncAccepted` | mark terms/training accepted |
+| `changeTargetBranch` | switch updater branch + trigger update |
+| `update` {action: check/install/fetch} | OTA controls |
+| `ssh` {username, keys} | install GitHub SSH keys |
+| `wifi` {ssid, password, action: connect/forget} | nmcli Wi-Fi |
+| `scanWifi` | nmcli scan |
+| `enableHotspot` / `disableHotspot` | wlan1 hotspot via systemd |
+| `formatSD` | format SD (offroad only) |
+| `remoteSupport` | spawn `/usr/kommu/support_tunnel.py` (← only kommu-dependent piece) |
+
+Every inbound message must carry `deviceList` containing the device's `DongleId`, or
+`devMode: true`, or it's dropped (`handle_send_channel`). `msgType: 'curPage'` tells the
+device which channel the app is viewing.
+
+### What this means for a custom app
+- **Fully possible.** The whole BT stack is open: standard BLE Nordic UART + msgpack.
+  No pairing secret, no kommu-signed protocol — the only auth is the `DongleId` check.
+- **Stack choices for a custom app:** Flutter Blue / react-native-ble-plx / native iOS
+  CoreBluetooth / Android BluetoothGatt — all speak Nordic UART fine.
+- **You don't need to touch the device side** to build a viewer-only app; just implement
+  RX-write + TX-notify + the chunking header + msgpack. For commands, copy the msgType set
+  you actually want.
+- **One kommu-coupled feature:** `remoteSupport` spawns `/usr/kommu/support_tunnel.py`
+  (a kommu binary). A custom app would just not implement that msgType (or replace it with
+  your own SSH tunnel).
+- **The stock app's limitations** (the ones worth fixing in a custom app) are app-side, not
+  protocol-side: rendering, UI, alerts — all controlled by whoever holds the phone screen.
+  The data stream from `appbridged` is rich (model path, leads, alerts, speed, calibration),
+  ~16 Hz, and there's plenty of bandwidth to add more services if you SubMaster them.

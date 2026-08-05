@@ -22,8 +22,8 @@ final class BLEManager: NSObject {
 
   struct DiscoveredPeripheral: Identifiable, Equatable {
     let id: UUID
-    let name: String
-    let rssi: Int
+    var name: String
+    var rssi: Int
     /// True if we matched on UART service or a KA2-style name; false if it's a
     /// generic nearby device surfaced by the "show all" fallback.
     var likelyKA2: Bool = true
@@ -50,6 +50,10 @@ final class BLEManager: NSObject {
   private var connectedPeripheral: CBPeripheral?
   private var rxChar: CBCharacteristic?
   private var txChar: CBCharacteristic?
+
+  /// Tracks device IDs we've already logged so the debug log isn't spammed by
+  /// the allow-duplicates scan. Reset on each startScan().
+  private var seenLogIds: Set<String> = []
 
   /// Reassembles incoming notify bytes into complete msgpack messages.
   let receiver = ChunkReceiver()
@@ -95,12 +99,25 @@ final class BLEManager: NSObject {
     DispatchQueue.main.async { self.connectionState = .scanning }
     discoveredPeripherals.removeAll()
     otherPeripherals.removeAll()
-    // No service filter — device doesn't advertise UART in its packet.
+    seenLogIds.removeAll()
+
+    // Stage 1: check for peripherals the system already knows about. If the
+    // kommu app (or system) has a connection/cache, this finds it instantly
+    // without needing the device to be advertising.
+    let known = central.retrieveConnectedPeripherals(withServices: [BLEProtocol.uartService])
+    for p in known {
+      AppLog.info("retrieveConnectedPeripherals hit: \(p.name ?? "?")")
+      addCandidate(p, rssi: -40, advertisedUART: true)
+    }
+
+    // Stage 2: active scan. Allow duplicates so we catch the scan-response
+    // packet on the second sighting — the KA2 only sends its name in the scan
+    // response, not the primary advertisement, so the first packet is "Unknown".
     central.scanForPeripherals(
       withServices: nil,
-      options: [CBCentralManagerScanOptionAllowDuplicatesKey: false]
+      options: [CBCentralManagerScanOptionAllowDuplicatesKey: true]
     )
-    AppLog.info("BLE scan started (no service filter)")
+    AppLog.info("BLE scan started (no service filter, allow duplicates)")
   }
 
   func stopScan() {
@@ -188,29 +205,54 @@ extension BLEManager: CBCentralManagerDelegate {
               ?? peripheral.name
               ?? "Unknown"
     let services = (advertisementData[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID]) ?? []
-    let serviceUUIDs = services.map { $0.uuidString }
-
-    // Always log so we can see what's actually nearby when debugging.
-    AppLog.debug("discovered: name=\(name) rssi=\(RSSI.intValue) services=\(serviceUUIDs) id=\(peripheral.identifier.uuidString.prefix(8))")
-
-    // Candidate if: advertises UART, OR name looks like a KA2/kommu hostname,
-    // OR has a non-generic name (the device hostname is often a serial-ish
-    // string like "lp-..." that doesn't contain "kommu").
     let advertisesUART = services.contains(where: { $0 == BLEProtocol.uartService })
-    let lower = name.lowercased()
+
+    // Verbose log on first sighting of each device.
+    let idPrefix = peripheral.identifier.uuidString.prefix(8)
+    let serviceUUIDs = services.map { $0.uuidString }
+    if seenLogIds.insert(String(idPrefix)).inserted {
+      AppLog.debug("discovered: name=\(name) rssi=\(RSSI.intValue) services=\(serviceUUIDs) id=\(idPrefix)")
+    }
+    addCandidate(peripheral, rssi: RSSI.intValue, name: name, advertisedUART: advertisesUART)
+  }
+
+  /// Shared add/update for both scan hits and retrieveConnectedPeripherals hits.
+  /// Updates the name if a later packet carries the real advertised name (the
+  /// KA2 sends its name in the scan response, so the first packet is "Unknown").
+  private func addCandidate(_ peripheral: CBPeripheral,
+                            rssi: Int,
+                            name: String? = nil,
+                            advertisedUART: Bool) {
+    let resolvedName = name ?? peripheral.name ?? "Unknown"
+    let lower = resolvedName.lowercased()
     let looksLikeKA2 = lower.contains("kommu") || lower.contains("ka2")
     let isGeneric = Self.ignoredNames.contains(lower)
-    let likelyKA2 = (advertisesUART || looksLikeKA2) && !isGeneric
+    // A strong-signal Unknown with no services is very likely the KA2 — its
+    // advertisement is minimal and the name rides in the scan response.
+    let isStrongUnknown = isGeneric && rssi >= -60
+    let likelyKA2 = (advertisedUART || looksLikeKA2 || isStrongUnknown) && true
 
-    let entry = DiscoveredPeripheral(id: peripheral.identifier, name: name,
-                                     rssi: RSSI.intValue, likelyKA2: likelyKA2)
+    let entry = DiscoveredPeripheral(id: peripheral.identifier, name: resolvedName,
+                                     rssi: rssi, likelyKA2: likelyKA2)
     DispatchQueue.main.async {
-      if likelyKA2 {
-        if !self.discoveredPeripherals.contains(where: { $0.id == entry.id }) {
+      // If we already have this peripheral, prefer the better name / stronger RSSI.
+      if let existingIdx = self.discoveredPeripherals.firstIndex(where: { $0.id == entry.id }) {
+        let existing = self.discoveredPeripherals[existingIdx]
+        let betterName = (existing.name == "Unknown" && resolvedName != "Unknown") ? resolvedName : existing.name
+        self.discoveredPeripherals[existingIdx].name = betterName
+        self.discoveredPeripherals[existingIdx].rssi = rssi
+      } else if let otherIdx = self.otherPeripherals.firstIndex(where: { $0.id == entry.id }) {
+        // Upgrade from "other" → "likely KA2" if new info says so.
+        if likelyKA2 {
+          self.otherPeripherals.remove(at: otherIdx)
           self.discoveredPeripherals.append(entry)
+        } else {
+          self.otherPeripherals[otherIdx].rssi = rssi
         }
-      } else if !isGeneric {
-        if !self.otherPeripherals.contains(where: { $0.id == entry.id }) {
+      } else {
+        if likelyKA2 {
+          self.discoveredPeripherals.append(entry)
+        } else if !isGeneric {
           self.otherPeripherals.append(entry)
         }
       }

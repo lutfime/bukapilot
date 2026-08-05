@@ -45,6 +45,10 @@ final class BLEManager: NSObject {
   /// Surfaced only when `showAllDevices` is on.
   @Published private(set) var otherPeripherals: [DiscoveredPeripheral] = []
 
+  /// True once we've connected to a device at least once — enables auto-reconnect
+  /// on unexpected disconnects and auto-connect on app launch.
+  @Published var autoReconnectEnabled: Bool = false
+
   private let centralQueue = DispatchQueue(label: "kommu.ble.central")
   private var central: CBCentralManager!
   private var connectedPeripheral: CBPeripheral?
@@ -54,6 +58,21 @@ final class BLEManager: NSObject {
   /// Tracks device IDs we've already logged so the debug log isn't spammed by
   /// the allow-duplicates scan. Reset on each startScan().
   private var seenLogIds: Set<String> = []
+
+  /// Persisted identifier of the last successfully connected device, so we can
+  /// auto-reconnect after disconnects and auto-connect on app launch.
+  private static let lastDeviceKey = "kommu.lastDeviceID"
+  private var lastConnectedID: UUID? {
+    get { UserDefaults.standard.string(forKey: Self.lastDeviceKey).flatMap(UUID.init) }
+    set {
+      if let id = newValue { UserDefaults.standard.set(id.uuidString, forKey: Self.lastDeviceKey) }
+      else { UserDefaults.standard.removeObject(forKey: Self.lastDeviceKey) }
+    }
+  }
+
+  /// Reconnect backoff (seconds). Doubles on each failure, capped at 30s.
+  private var reconnectAttempt = 0
+  private var reconnectWorkItem: DispatchWorkItem?
 
   /// Reassembles incoming notify bytes into complete msgpack messages.
   let receiver = ChunkReceiver()
@@ -143,6 +162,28 @@ final class BLEManager: NSObject {
     connect(peripheral: target, name: peripheral.name)
   }
 
+  /// Auto-connect to the last known device, if any. Call on app launch.
+  /// Resolves via retrievePeripherals (works without scanning) and connects
+  /// directly; if the device isn't reachable, CoreBluetooth will fail and we
+  /// fall through to the normal scan flow.
+  func autoConnectIfKnown() {
+    guard autoReconnectEnabled, let id = lastConnectedID else { return }
+    guard let p = central.retrievePeripherals(withIdentifiers: [id]).first else {
+      AppLog.info("autoConnect: last device \(id) not known to system; will scan")
+      return
+    }
+    AppLog.info("autoConnect: connecting to last device \(p.name ?? id.uuidString.prefix(8).description)")
+    connect(peripheral: p, name: p.name ?? "KA2")
+  }
+
+  /// Forget the last connected device and stop auto-reconnecting.
+  func forgetDevice() {
+    lastConnectedID = nil
+    autoReconnectEnabled = false
+    cancelReconnect()
+    disconnect()
+  }
+
   /// Disconnect the current peripheral.
   func disconnect() {
     if let p = connectedPeripheral {
@@ -174,6 +215,8 @@ final class BLEManager: NSObject {
     }
     connectedPeripheral = peripheral
     peripheral.delegate = self
+    lastConnectedID = peripheral.identifier   // remember for auto-reconnect
+    cancelReconnect()
     DispatchQueue.main.async { self.connectionState = .connecting }
     central.connect(peripheral, options: nil)
     AppLog.info("connecting to \(name)")
@@ -262,6 +305,8 @@ extension BLEManager: CBCentralManagerDelegate {
   func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
     let name = peripheral.name ?? "KA2"
     AppLog.info("connected to \(name), discovering services")
+    reconnectAttempt = 0                  // reset backoff on success
+    autoReconnectEnabled = true           // first connect arms auto-reconnect
     DispatchQueue.main.async { self.connectionState = .connected(deviceName: name) }
     peripheral.discoverServices([BLEProtocol.uartService])
   }
@@ -272,6 +317,7 @@ extension BLEManager: CBCentralManagerDelegate {
     let msg = error?.localizedDescription ?? "unknown"
     AppLog.error("didFailToConnect: \(msg)")
     DispatchQueue.main.async { self.connectionState = .failed(msg) }
+    scheduleReconnect()                   // try again after backoff
   }
 
   func centralManager(_ central: CBCentralManager,
@@ -282,8 +328,42 @@ extension BLEManager: CBCentralManagerDelegate {
     rxChar = nil
     txChar = nil
     receiver.reset()
-    let state: BLEConnectionState = msg.map { .failed($0) } ?? .disconnected
-    DispatchQueue.main.async { self.connectionState = state }
+    // Show a transient state, then attempt reconnect if armed.
+    DispatchQueue.main.async { self.connectionState = .disconnected }
+    scheduleReconnect()
+  }
+
+  // MARK: Reconnect
+
+  /// Attempt to reconnect to the last device with exponential backoff.
+  /// Only fires when autoReconnectEnabled is on and we have a remembered ID.
+  private func scheduleReconnect() {
+    cancelReconnect()
+    guard autoReconnectEnabled, let id = lastConnectedID else { return }
+
+    reconnectAttempt += 1
+    let delay = min(2.0 * Double(reconnectAttempt), 30.0)  // 2s, 4s, 8s, ... cap 30s
+    AppLog.info("scheduling reconnect attempt #\(reconnectAttempt) in \(delay)s")
+    DispatchQueue.main.async { self.connectionState = .connecting }
+
+    let work = DispatchWorkItem { [weak self] in
+      guard let self, let p = self.central.retrievePeripherals(withIdentifiers: [id]).first else {
+        AppLog.warn("reconnect: device \(id) no longer resolvable")
+        self?.scheduleReconnect()
+        return
+      }
+      AppLog.info("reconnect: connecting to \(p.name ?? "?")")
+      self.connectedPeripheral = p
+      p.delegate = self
+      self.central.connect(p, options: nil)
+    }
+    reconnectWorkItem = work
+    centralQueue.asyncAfter(deadline: .now() + delay, execute: work)
+  }
+
+  private func cancelReconnect() {
+    reconnectWorkItem?.cancel()
+    reconnectWorkItem = nil
   }
 }
 

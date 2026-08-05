@@ -70,6 +70,12 @@ final class DriveSessionViewModel: ObservableObject {
     ble.onMessage = { [weak self] channel, data in
       Task { @MainActor in self?.handle(channel: channel, data: data) }
     }
+
+    // Auto-connect to the last known device on launch (no scan needed).
+    // Small delay so the central manager has time to power on.
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+      self?.ble.autoConnectIfKnown()
+    }
   }
 
   // MARK: Public actions (called from views)

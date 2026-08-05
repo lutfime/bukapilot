@@ -41,6 +41,14 @@ final class DriveSessionViewModel: ObservableObject {
   /// Passthrough of BLE connection state for the connection screen.
   @Published private(set) var connectionState: BLEConnectionState = .disconnected
 
+  // Republished BLE discovery state — SwiftUI views observe the ViewModel, so
+  // these mirrors are needed for the ConnectionView list to update in real time.
+  @Published private(set) var discoveredPeripherals: [BLEManager.DiscoveredPeripheral] = []
+  @Published private(set) var otherPeripherals: [BLEManager.DiscoveredPeripheral] = []
+  @Published var showAllDevices: Bool = false
+  @Published private(set) var autoReconnectEnabled: Bool = false
+  @Published private(set) var reconnectTimedOut: Bool = false
+
   // MARK: Internals
 
   let ble = BLEManager()
@@ -66,6 +74,33 @@ final class DriveSessionViewModel: ObservableObject {
       .sink { [weak self] state in self?.connectionState = state }
       .store(in: &cancellables)
 
+    // Republish discovery state so SwiftUI views re-render when devices appear.
+    ble.$discoveredPeripherals
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] peripherals in self?.discoveredPeripherals = peripherals }
+      .store(in: &cancellables)
+
+    ble.$otherPeripherals
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] peripherals in self?.otherPeripherals = peripherals }
+      .store(in: &cancellables)
+
+    ble.$autoReconnectEnabled
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] value in self?.autoReconnectEnabled = value }
+      .store(in: &cancellables)
+
+    ble.$reconnectTimedOut
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] value in self?.reconnectTimedOut = value }
+      .store(in: &cancellables)
+
+    // Two-way bind showAllDevices (view sets it, BLE reads it).
+    $showAllDevices
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] value in self?.ble.showAllDevices = value }
+      .store(in: &cancellables)
+
     // Handle every complete message that comes back from the device.
     ble.onMessage = { [weak self] channel, data in
       Task { @MainActor in self?.handle(channel: channel, data: data) }
@@ -83,6 +118,23 @@ final class DriveSessionViewModel: ObservableObject {
     framesReceived = 256
     startMockAnimation()
     #endif
+  }
+
+  // MARK: App lifecycle
+
+  /// Called when the app returns to the foreground. iOS drops BLE connections
+  /// shortly after backgrounding, so we need to reconnect or rescan every time.
+  func handleAppBecameActive() {
+    if connectionState.isConnected {
+      // Still connected (fast background cycle) — re-request visualisation.
+      requestVisualisation()
+    } else if ble.autoReconnectEnabled {
+      // Was connected before, now dropped — try auto-reconnect.
+      ble.autoConnectIfKnown()
+    } else {
+      // No prior connection — start scanning.
+      ble.startScan()
+    }
   }
 
   #if targetEnvironment(simulator)

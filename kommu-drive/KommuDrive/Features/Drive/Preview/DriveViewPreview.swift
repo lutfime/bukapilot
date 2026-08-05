@@ -9,18 +9,18 @@ struct DriveViewPreview: View {
   init() {
     let vm = DriveSessionViewModel()
     vm.latestFrame = Self.sampleFrame
-    vm.settings = DeviceSettings(
-      dongleID: "kommu-e2eed9037197a64e", gitCommit: "abc1234",
-      currentVersion: "0.10.3", osVersion: "AGNOS 5", state: "enabled",
-      isMetric: true, isOffroad: false, localIP: "192.168.1.42",
-      activeWlanSSID: "HomeWiFi", networkType: "Wi-Fi", simStatus: "—",
-      enabled: true, quietMode: false, experimentalMode: true,
-      alcEnabled: true, ldwEnabled: true, recordFront: false, sshEnabled: false,
-      updateAvailable: false, updaterFetchAvailable: false,
-      updaterTargetBranch: "x70-test", updaterState: "idle",
-      carName: "Proton X70", drivePathOffset: "0", brakeMagGain: nil,
-      wifiList: [], availableBranches: "release3-staging,x70-test"
-    )
+//    vm.settings = DeviceSettings(
+//      dongleID: "kommu-e2eed9037197a64e", gitCommit: "abc1234",
+//      currentVersion: "0.10.3", osVersion: "AGNOS 5", state: "enabled",
+//      isMetric: true, isOffroad: false, localIP: "192.168.1.42",
+//      activeWlanSSID: "HomeWiFi", networkType: "Wi-Fi", simStatus: "—",
+//      enabled: true, quietMode: false, experimentalMode: true,
+//      alcEnabled: true, ldwEnabled: true, recordFront: false, sshEnabled: false,
+//      updateAvailable: false, updaterFetchAvailable: false,
+//      updaterTargetBranch: "x70-test", updaterState: "idle",
+//      carName: "Proton X70", drivePathOffset: "0", brakeMagGain: nil,
+//      wifiList: [], availableBranches: "release3-staging,x70-test"
+//    )
     vm.framesReceived = 256
     vm._debugInjectIndicators(confidence: 0.82, steering: 0.6)
     _vm = StateObject(wrappedValue: vm)

@@ -49,6 +49,11 @@ final class BLEManager: NSObject {
   /// on unexpected disconnects and auto-connect on app launch.
   @Published var autoReconnectEnabled: Bool = false
 
+  /// Set to true when a reconnect/auto-connect attempt has been stuck in
+  /// `.connecting` for too long. The UI uses this to stop showing the
+  /// reconnect overlay and fall through to the ConnectionView scan screen.
+  @Published var reconnectTimedOut: Bool = false
+
   private let centralQueue = DispatchQueue(label: "kommu.ble.central")
   private var central: CBCentralManager!
   private var connectedPeripheral: CBPeripheral?
@@ -167,9 +172,16 @@ final class BLEManager: NSObject {
   /// directly; if the device isn't reachable, CoreBluetooth will fail and we
   /// fall through to the normal scan flow.
   func autoConnectIfKnown() {
-    guard autoReconnectEnabled, let id = lastConnectedID else { return }
+    guard autoReconnectEnabled, let id = lastConnectedID else {
+      // No saved device — start scanning so the user sees the ConnectionView list.
+      startScan()
+      return
+    }
     guard let p = central.retrievePeripherals(withIdentifiers: [id]).first else {
-      AppLog.info("autoConnect: last device \(id) not known to system; will scan")
+      AppLog.info("autoConnect: last device \(id) not known to system; starting scan")
+      // Device not resolvable (e.g. KA2 rebooted, BLE address changed) — fall
+      // back to active scanning so the user can re-discover and reconnect.
+      startScan()
       return
     }
     AppLog.info("autoConnect: connecting to last device \(p.name ?? id.uuidString.prefix(8).description)")
@@ -237,9 +249,36 @@ final class BLEManager: NSObject {
     peripheral.delegate = self
     lastConnectedID = peripheral.identifier   // remember for auto-reconnect
     cancelReconnect()
-    DispatchQueue.main.async { self.connectionState = .connecting }
+    DispatchQueue.main.async {
+      self.connectionState = .connecting
+      self.reconnectTimedOut = false
+    }
     central.connect(peripheral, options: nil)
     AppLog.info("connecting to \(name)")
+
+    // Timeout: if we're still in .connecting after 8 seconds, bail out to
+    // the scan screen so the user isn't stuck on a frozen reconnect overlay.
+    centralQueue.asyncAfter(deadline: .now() + 8) { [weak self] in
+      guard let self else { return }
+      if case .connecting = self.connectionState {
+        AppLog.warn("connect timed out after 8s — falling back to scan")
+        DispatchQueue.main.async {
+          self.reconnectTimedOut = true
+          self.connectionState = .disconnected
+          self.cancelPeripheralConnection()
+          self.startScan()
+        }
+      }
+    }
+  }
+
+  private func cancelPeripheralConnection() {
+    if let p = connectedPeripheral {
+      central.cancelPeripheralConnection(p)
+    }
+    connectedPeripheral = nil
+    rxChar = nil
+    txChar = nil
   }
 
   /// Fallback resolver: CoreBluetooth sometimes needs retrievePeripherals
@@ -367,9 +406,19 @@ extension BLEManager: CBCentralManagerDelegate {
     DispatchQueue.main.async { self.connectionState = .connecting }
 
     let work = DispatchWorkItem { [weak self] in
-      guard let self, let p = self.central.retrievePeripherals(withIdentifiers: [id]).first else {
-        AppLog.warn("reconnect: device \(id) no longer resolvable")
-        self?.scheduleReconnect()
+      guard let self else { return }
+      // After 5 failed attempts, give up on reconnect and fall back to scanning
+      // so the user can re-discover the device manually.
+      if self.reconnectAttempt > 5 {
+        AppLog.warn("reconnect: gave up after \(self.reconnectAttempt) attempts; starting scan")
+        self.reconnectAttempt = 0
+        self.connectionState = .disconnected
+        self.startScan()
+        return
+      }
+      guard let p = self.central.retrievePeripherals(withIdentifiers: [id]).first else {
+        AppLog.warn("reconnect: device \(id) no longer resolvable (attempt \(self.reconnectAttempt))")
+        self.scheduleReconnect()
         return
       }
       AppLog.info("reconnect: connecting to \(p.name ?? "?")")

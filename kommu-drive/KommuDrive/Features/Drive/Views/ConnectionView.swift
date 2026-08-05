@@ -19,10 +19,10 @@ struct ConnectionView: View {
 
       List {
         Section {
-          if viewModel.ble.discoveredPeripherals.isEmpty {
+          if viewModel.discoveredPeripherals.isEmpty {
             emptyState
           } else {
-            ForEach(viewModel.ble.discoveredPeripherals) { peripheral in
+            ForEach(viewModel.discoveredPeripherals) { peripheral in
               Button {
                 viewModel.connect(to: peripheral.id)
               } label: {
@@ -39,9 +39,9 @@ struct ConnectionView: View {
         }
 
         // Fallback: show every nearby device if the KA2 wasn't auto-matched.
-        if viewModel.ble.showAllDevices && !viewModel.ble.otherPeripherals.isEmpty {
+        if viewModel.showAllDevices && !viewModel.otherPeripherals.isEmpty {
           Section {
-            ForEach(viewModel.ble.otherPeripherals) { peripheral in
+            ForEach(viewModel.otherPeripherals) { peripheral in
               Button {
                 viewModel.connect(to: peripheral.id)
               } label: {
@@ -53,7 +53,7 @@ struct ConnectionView: View {
             Text("All nearby devices")
               .font(.system(size: 12, weight: .semibold))
               .foregroundStyle(.secondary)
-              .textCase(nil)
+            .textCase(nil)
           }
         }
       }
@@ -133,14 +133,14 @@ struct ConnectionView: View {
       // Show-all fallback: if auto-match misses your device, surface everything
       // nearby so you can pick it manually.
       Button {
-        viewModel.ble.showAllDevices = true
+        viewModel.showAllDevices = true
       } label: {
         Label("Show all nearby devices", systemImage: "list.bullet")
           .font(.system(size: 13, weight: .semibold))
       }
       .buttonStyle(.bordered)
       .tint(.white)
-      .opacity(viewModel.ble.showAllDevices ? 0 : 1)
+      .opacity(viewModel.showAllDevices ? 0 : 1)
     }
     .frame(maxWidth: .infinity)
     .padding(.vertical, 32)

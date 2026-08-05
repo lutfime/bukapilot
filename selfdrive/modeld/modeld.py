@@ -85,8 +85,8 @@ def _use_rknn_supercombo() -> bool:
 LAT_SMOOTH_SECONDS = 0.0  # comma stock. (Was 0.2 to damp torque wobble, but drive data showed the wobble was the torque controller's P-term railing at low speed, NOT feedforward/model noise — so reverted. Re-enable only if a controller shows genuine model-noise wobble.)
 LONG_SMOOTH_SECONDS = 0.3
 MIN_LAT_CONTROL_SPEED = 0.3
-# When the 0.11 supercombo model (with action head) is active, apply upstream 0.11's value.
-LAT_SMOOTH_SECONDS_011 = 0.1
+# When the 0.11 supercombo model (with action head) is active, use upstream 0.11's value (0.0).
+LAT_SMOOTH_SECONDS_011 = 0.0
 
 DRIVE_PATH_OFFSET_LIMIT_M = 0.25
 DRIVE_PATH_OFFSET_STEP = 0.05

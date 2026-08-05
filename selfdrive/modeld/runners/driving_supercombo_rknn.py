@@ -53,11 +53,19 @@ class DrivingSupercomboRKNNRunner:
     # The features_buffer shape the model expects (0.11 = (1,24,512), 0.10 was (1,25,512))
     self._fb_shape = self.input_shapes["features_buffer"]
 
-    # Load RKNN
+    # Load RKNN — pin to NPU core 2 by default (same as the split runner).
+    # The split runner pins driving to core 2 and dmonitoring to cores 0+1 to avoid contention.
+    core_mask = os.getenv("RKNN_DRIVING_CORE_MASK", "0x4")
+    core_map = {
+      "0x4": getattr(RKNNLite, "NPU_CORE_2", None),
+      "2":   getattr(RKNNLite, "NPU_CORE_2", None),
+      "0":   getattr(RKNNLite, "NPU_CORE_0", None),
+      "1":   getattr(RKNNLite, "NPU_CORE_1", None),
+      "0_1_2": getattr(RKNNLite, "NPU_CORE_0_1_2", None),
+    }
     self._rknn = RKNNLite(verbose=False)
     self._rknn.load_rknn(str(rknn_path))
-    core_mask = os.getenv("RKNN_DRIVING_CORE_MASK", "0x4")  # default core 2
-    self._rknn.init_runtime(core_mask=RKNNLite.NPU_CORE_2 if core_mask == "0x4" else None)
+    self._rknn.init_runtime(core_mask=core_map.get(core_mask))
 
     # Vision layout options (carry over from the split runner for consistency)
     vision_fmt = os.getenv("RKNN_PY_VISION_FORMAT", "nchw").lower()

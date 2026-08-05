@@ -64,9 +64,12 @@ def _use_rknn_driving() -> bool:
     return False
   return os.getenv('USE_RKNN', '1') != '0'
 
-LAT_SMOOTH_SECONDS = 0.1
+LAT_SMOOTH_SECONDS = 0.0
 LONG_SMOOTH_SECONDS = 0.3
 MIN_LAT_CONTROL_SPEED = 0.3
+# When the 0.11 supercombo model (with action head) is active, apply slightly more
+# curvature smoothing (matches upstream 0.11). The legacy 0.10 path keeps 0.0 (stock).
+LAT_SMOOTH_SECONDS_011 = 0.1
 
 DRIVE_PATH_OFFSET_LIMIT_M = 0.25
 DRIVE_PATH_OFFSET_STEP = 0.05
@@ -120,15 +123,17 @@ def get_action_from_model(model_output: dict[str, np.ndarray], prev_action: log.
                                                   ModelConstants.T_IDXS,
                                                   v_ego,
                                                   lat_action_t)
+      lat_smooth = LAT_SMOOTH_SECONDS
     else:
       # 0.11 model with a direct action head: curvature/accel emitted by the model itself.
       desired_accel = float(model_output['action'][0,1])
       desired_curvature = float(model_output['action'][0,0]) / (max(1.0, v_ego))**2
       should_stop = should_stop_from_action(v_ego, desired_accel)
+      lat_smooth = LAT_SMOOTH_SECONDS_011
 
     desired_accel = smooth_value(desired_accel, prev_action.desiredAcceleration, LONG_SMOOTH_SECONDS)
     if v_ego > MIN_LAT_CONTROL_SPEED:
-      desired_curvature = smooth_value(desired_curvature, prev_action.desiredCurvature, LAT_SMOOTH_SECONDS)
+      desired_curvature = smooth_value(desired_curvature, prev_action.desiredCurvature, lat_smooth)
     else:
       desired_curvature = prev_action.desiredCurvature
 

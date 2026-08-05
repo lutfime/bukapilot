@@ -56,14 +56,13 @@ class CarInterface(CarInterfaceBase):
     elif candidate == CAR.PROTON_X70:
       ret.steerActuatorDelay = 0.17  # measured ~170ms (cmd vs actual steer angle, full-rate rlog); KA1 had 0.13
       # Lateral controller: torque (self-tuning via locationd/torqued) instead of PID.
-      # Seed: was override.toml [2.5, 2.5, 0.1] (latAccelFactor, maxLatAccel, friction).
-      # torqued refines online ('proton' now in ALLOWED_CARS); it measured raw latAccelFactor~1.37
-      # and latAccelOffset~-0.09 but wouldn't commit (override-starved + 2.5 seed pinned the learn band high).
-      # Seed near measured: factor 1.5 (room to learn up), offset -0.09 cancels the steady right pull.
+      # Seed = torqued-converged values (route 2026-08-05--06-20-13, calPerc 100%): factor ~1.44, offset ~-0.017, friction ~0.136.
+      # torqued refines online ('proton' in ALLOWED_CARS); seeding the measured values gives an accurate
+      # cold-start after any torqued reset (was originally [2.5, 0.1, 0.0], then [1.5, 0.1, -0.09]).
       ret.lateralTuning.init("torque")
-      ret.lateralTuning.torque.latAccelFactor = 1.5
-      ret.lateralTuning.torque.friction = 0.1
-      ret.lateralTuning.torque.latAccelOffset = -0.09
+      ret.lateralTuning.torque.latAccelFactor = 1.44
+      ret.lateralTuning.torque.friction = 0.14
+      ret.lateralTuning.torque.latAccelOffset = -0.02
       ret.lateralTuning.torque.steeringAngleDeadzoneDeg = 0.0
       # Longitudinal: restore release_ka2 gains. x70-ka2/staging had zeroed kp/ki (base default [0.])
       # -> pure feedforward, no feedback correction. release_ka2 X70 used these (proven on this car).

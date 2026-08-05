@@ -109,7 +109,7 @@ procs = [
   PythonProcess("hardwared", "system.hardware.hardwared", always_run),
   PythonProcess("tombstoned", "system.tombstoned", always_run, enabled=not PC),
   PythonProcess("updated", "system.updated.updated", only_offroad, enabled=not PC),
-  NativeProcess("uploader", ".", ["python3", "-m", "system.loggerd.uploader"], always_run),
+  # NativeProcess("uploader", ".", ["python3", "-m", "system.loggerd.uploader"], always_run),  # privacy: no drive-data upload to Kommu (web.kommu.ai also blocked in /etc/hosts)
   PythonProcess("statsd", "system.statsd", always_run, enabled=TICI),
   PythonProcess("feedbackd", "selfdrive.ui.feedback.feedbackd", only_onroad),
 

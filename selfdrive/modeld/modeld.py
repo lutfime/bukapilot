@@ -64,7 +64,7 @@ def _use_rknn_driving() -> bool:
     return False
   return os.getenv('USE_RKNN', '1') != '0'
 
-LAT_SMOOTH_SECONDS = 0.0
+LAT_SMOOTH_SECONDS = 0.2  # Kommu X70: RKNN-ported model emits noisier curvature than comma's ref model; smooth to damp highway steering wobble (comma ships 0.0). Tune 0.1-0.4.
 LONG_SMOOTH_SECONDS = 0.3
 MIN_LAT_CONTROL_SPEED = 0.3
 

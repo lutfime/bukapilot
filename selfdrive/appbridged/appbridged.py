@@ -130,20 +130,17 @@ X70_PID_TOGGLE_FILE = "/data/params/d/X70UsePidController"
 SUPERCOMBO_TOGGLE_FILE = "/data/params/d/UseSupercomboModel"
 
 def get_x70_pid_toggle():
+  # DEFAULT = PID: absent file or "1" -> PID (True); "0" -> torque (False).
   try:
-    return open(X70_PID_TOGGLE_FILE).read().strip() == "1"
+    return open(X70_PID_TOGGLE_FILE).read().strip() != "0"
   except (FileNotFoundError, OSError):
-    return False
+    return True
 
 def set_x70_pid_toggle(val):
+  # True (PID, default) -> "1"; False (torque) -> "0" (must WRITE "0", not remove, to override the PID default).
   try:
-    if val:
-      with open(X70_PID_TOGGLE_FILE, "w") as f:
-        f.write("1")
-    else:
-      os.remove(X70_PID_TOGGLE_FILE)
-  except FileNotFoundError:
-    pass
+    with open(X70_PID_TOGGLE_FILE, "w") as f:
+      f.write("1" if val else "0")
   except OSError as e:
     cloudlog.error(f"Error setting X70UsePidController: {e}")
 

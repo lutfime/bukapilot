@@ -65,16 +65,16 @@ class CarInterface(CarInterfaceBase):
       ret.longitudinalTuning.kiBP = [0.0, 5.0, 20.0]
       ret.longitudinalTuning.kiV  = [0.2, 0.15, 0.1]
       ret.longitudinalActuatorDelay = 0.45  # release_ka2 used 0.4-0.5; x70-ka2 base was 0.6
-      # --- Lateral controller toggle (KommuDrive app). Default = torque. ---
-      # Stored as a raw file (not via Params: the key isn't in params_keys.h and this device can't
-      # rebuild params_pyx). KommuDrive writes /data/params/d/X70UsePidController = "1" (PID) or removes
-      # it (torque). If the key is ever registered + params_pyx rebuilt, this is the exact file
-      # Params.get_bool reads, so switching back is seamless.
+      # --- Lateral controller toggle (KommuDrive app). DEFAULT = PID (KA1-tuned: smooth, no
+      # low-speed railing). Torque is opt-in (toggle file = "0"). Stored as a raw file (key not in
+      # params_keys.h, device can't rebuild params_pyx). KommuDrive writes /data/params/d/
+      # X70UsePidController = "1" (PID, default) or "0" (torque). If the key is ever registered +
+      # params_pyx rebuilt, this is the exact file Params.get_bool reads, so switching back is seamless.
       try:
         with open("/data/params/d/X70UsePidController") as _f:
-          _use_pid = _f.read().strip() == "1"
+          _use_pid = _f.read().strip() != "0"
       except (FileNotFoundError, OSError):
-        _use_pid = False
+        _use_pid = True
       if _use_pid:
         # PID: KA1-tuned (ports directly to 0.10 — same +/-1.0 output scale, ff=kf*angle*vEgo^2, angle error).
         # Low kpV[0]=0.0005 = the smooth, no-wobble/no-reengage-slam feel KA1 had (vs torque's huge low-speed kp).
@@ -85,7 +85,7 @@ class CarInterface(CarInterfaceBase):
         ret.lateralTuning.pid.kiV  = [0.001, 0.01, 0.09, 0.4, 0.5]
         ret.lateralTuning.pid.kf   = 0.000006
       else:
-        # Torque (self-tuning via locationd/torqued) — default. Seed = torqued-converged values; torqued refines online.
+        # Torque (self-tuning via locationd/torqued) — OPT-IN (toggle off). Seed = torqued-converged; torqued refines online. Stock KP_INTERP rails at low speed on this car -> wobble (see result/lateral_analysis.py).
         ret.lateralTuning.init("torque")
         ret.lateralTuning.torque.latAccelFactor = 1.44
         ret.lateralTuning.torque.friction = 0.14

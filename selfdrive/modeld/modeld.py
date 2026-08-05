@@ -82,7 +82,7 @@ def _use_rknn_supercombo() -> bool:
     return False
   return SUPERCOMBO_RKNN_PATH.exists() and SUPERCOMBO_METADATA_PATH.exists()
 
-LAT_SMOOTH_SECONDS = 0.2  # Kommu X70: RKNN-ported model emits noisier curvature than comma's ref model; smooth to damp highway steering wobble (comma ships 0.0). Tune 0.1-0.4.
+LAT_SMOOTH_SECONDS = 0.0  # comma stock. (Was 0.2 to damp torque wobble, but drive data showed the wobble was the torque controller's P-term railing at low speed, NOT feedforward/model noise — so reverted. Re-enable only if a controller shows genuine model-noise wobble.)
 LONG_SMOOTH_SECONDS = 0.3
 MIN_LAT_CONTROL_SPEED = 0.3
 # When the 0.11 supercombo model (with action head) is active, apply upstream 0.11's value.

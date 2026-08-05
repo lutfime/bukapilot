@@ -85,8 +85,8 @@ def _use_rknn_supercombo() -> bool:
 LAT_SMOOTH_SECONDS = 0.2  # Kommu X70: RKNN-ported model emits noisier curvature than comma's ref model; smooth to damp highway steering wobble (comma ships 0.0). Tune 0.1-0.4.
 LONG_SMOOTH_SECONDS = 0.3
 MIN_LAT_CONTROL_SPEED = 0.3
-# When the 0.11 supercombo model (with action head) is active, apply upstream 0.11's value.
-LAT_SMOOTH_SECONDS_011 = 0.1
+# When the 0.11 supercombo model (with action head) is active, use upstream 0.11's value (0.0).
+LAT_SMOOTH_SECONDS_011 = 0.0
 
 DRIVE_PATH_OFFSET_LIMIT_M = 0.25
 DRIVE_PATH_OFFSET_STEP = 0.05

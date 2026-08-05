@@ -8,7 +8,6 @@ from opendbc.car.proton.radar_interface import RadarInterface
 from opendbc.car.proton.values import CAR, DBC, ProtonSafetyFlags
 
 from openpilot.common.features import Features
-from openpilot.common.params import Params
 
 
 class CarInterface(CarInterfaceBase):
@@ -66,8 +65,17 @@ class CarInterface(CarInterfaceBase):
       ret.longitudinalTuning.kiBP = [0.0, 5.0, 20.0]
       ret.longitudinalTuning.kiV  = [0.2, 0.15, 0.1]
       ret.longitudinalActuatorDelay = 0.45  # release_ka2 used 0.4-0.5; x70-ka2 base was 0.6
-      # --- Lateral controller toggle (KommuDrive app writes bool param X70UsePidController; default = torque) ---
-      if Params().get_bool("X70UsePidController"):
+      # --- Lateral controller toggle (KommuDrive app). Default = torque. ---
+      # Stored as a raw file (not via Params: the key isn't in params_keys.h and this device can't
+      # rebuild params_pyx). KommuDrive writes /data/params/d/X70UsePidController = "1" (PID) or removes
+      # it (torque). If the key is ever registered + params_pyx rebuilt, this is the exact file
+      # Params.get_bool reads, so switching back is seamless.
+      try:
+        with open("/data/params/d/X70UsePidController") as _f:
+          _use_pid = _f.read().strip() == "1"
+      except (FileNotFoundError, OSError):
+        _use_pid = False
+      if _use_pid:
         # PID: KA1-tuned (ports directly to 0.10 — same +/-1.0 output scale, ff=kf*angle*vEgo^2, angle error).
         # Low kpV[0]=0.0005 = the smooth, no-wobble/no-reengage-slam feel KA1 had (vs torque's huge low-speed kp).
         ret.lateralTuning.init("pid")

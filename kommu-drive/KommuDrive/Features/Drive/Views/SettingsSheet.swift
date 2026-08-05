@@ -15,6 +15,7 @@ struct SettingsSheet: View {
   @State private var laneDepartureWarning: Bool = false
   @State private var recordDriverCamera: Bool = false
   @State private var sshEnabled: Bool = false
+  @State private var usePidController: Bool = false
 
   @State private var showRebootConfirm = false
   @State private var wifiPasswordEntry: WifiNetwork? = nil
@@ -99,6 +100,7 @@ struct SettingsSheet: View {
       toggleRow("Quiet Mode", isOn: $quietMode, key: "QuietMode")
       toggleRow("Record Driver Camera", isOn: $recordDriverCamera, key: "RecordFront")
       toggleRow("SSH", isOn: $sshEnabled, key: "SshEnabled")
+      toggleRow("PID Steering (X70)", isOn: $usePidController, key: "X70UsePidController")
     } header: {
       Text("Software Settings")
     } footer: {
@@ -304,6 +306,7 @@ struct SettingsSheet: View {
     laneDepartureWarning = viewModel.settings.ldwEnabled
     recordDriverCamera = viewModel.settings.recordFront
     sshEnabled = viewModel.settings.sshEnabled
+    usePidController = viewModel.settings.usePidController
   }
 }
 

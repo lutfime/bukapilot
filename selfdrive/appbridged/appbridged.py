@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import os
 import socket
 import msgpack
 import subprocess
@@ -119,6 +120,31 @@ def safe_put_all(settings_to_put, is_bool=False):
         param_key, value if is_bool else str(value).strip())
     except Exception as e:
       cloudlog.error(f"Error putting {param_key}: {e}")
+
+# X70 lateral-controller toggle (PID on / torque off). The key is NOT registered in
+# common/params_keys.h, and this device can't rebuild params_pyx (no scons/Cython), so the
+# KommuDrive app reads/writes it as a raw file at the path Params would use. If the key is
+# ever registered + params_pyx rebuilt, switch back to bool_keys/safe_put_all — the file
+# location already matches what Params.get_bool would read.
+X70_PID_TOGGLE_FILE = "/data/params/d/X70UsePidController"
+
+def get_x70_pid_toggle():
+  try:
+    return open(X70_PID_TOGGLE_FILE).read().strip() == "1"
+  except (FileNotFoundError, OSError):
+    return False
+
+def set_x70_pid_toggle(val):
+  try:
+    if val:
+      with open(X70_PID_TOGGLE_FILE, "w") as f:
+        f.write("1")
+    else:
+      os.remove(X70_PID_TOGGLE_FILE)
+  except FileNotFoundError:
+    pass
+  except OSError as e:
+    cloudlog.error(f"Error setting X70UsePidController: {e}")
 
 def reset_calibration(state):
   if state == log.SelfdriveState.OpenpilotState.disabled:
@@ -367,6 +393,7 @@ class AppBridge:
     for key in string_keys:
       sett[key] = safe_get(key, False)
     sett['BrakeMagGain'] = safe_get('BrakeMagGain', False) if self.hw_helper.car_has_openpilot_long() else None
+    sett['X70UsePidController'] = get_x70_pid_toggle()
     try:
       self.ble.chunk_and_send(CHANNEL_SETTINGS, msgpack.packb(sett))
     except Exception as e:
@@ -396,6 +423,8 @@ class AppBridge:
         return
       match settings.pop('msgType', None):
         case 'saveToggle':
+          if 'X70UsePidController' in settings:
+            set_x70_pid_toggle(bool(settings.pop('X70UsePidController')))
           safe_put_all(settings, True)
         case 'saveConfig':
           if (car_name := settings.pop('CarName', None)) is not None:

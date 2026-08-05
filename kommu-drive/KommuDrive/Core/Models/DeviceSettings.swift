@@ -31,6 +31,7 @@ struct DeviceSettings: Equatable {
   let ldwEnabled: Bool           // IsLdwEnabled (lane departure warning)
   let recordFront: Bool          // RecordFront (dashcam record driver-facing cam)
   let sshEnabled: Bool           // SshEnabled
+  let usePidController: Bool     // X70UsePidController (X70 only: PID vs torque lateral controller)
 
   // Update
   let updateAvailable: Bool
@@ -55,6 +56,7 @@ struct DeviceSettings: Equatable {
     activeWlanSSID: nil, networkType: nil, simStatus: nil,
     enabled: false, quietMode: false, experimentalMode: false,
     alcEnabled: false, ldwEnabled: false, recordFront: false, sshEnabled: false,
+    usePidController: false,
     updateAvailable: false, updaterFetchAvailable: false,
     updaterTargetBranch: nil, updaterState: nil,
     carName: nil, drivePathOffset: nil, brakeMagGain: nil,
@@ -93,6 +95,7 @@ struct DeviceSettings: Equatable {
       ldwEnabled: bool("IsLdwEnabled"),
       recordFront: bool("RecordFront"),
       sshEnabled: bool("SshEnabled"),
+      usePidController: bool("X70UsePidController"),
       updateAvailable: bool("UpdateAvailable"),
       updaterFetchAvailable: bool("UpdaterFetchAvailable"),
       updaterTargetBranch: str("UpdaterTargetBranch"),

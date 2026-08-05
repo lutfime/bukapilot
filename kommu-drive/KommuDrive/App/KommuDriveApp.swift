@@ -19,7 +19,7 @@ struct RootView: View {
 
   var body: some View {
     Group {
-      if viewModel.connectionState.isConnected {
+      if viewModel.connectionState.isConnected || viewModel.latestFrame != nil {
         DriveView(viewModel: viewModel)
       } else if viewModel.ble.autoReconnectEnabled, case .connecting = viewModel.connectionState {
         // Reconnecting — keep the drive view but show a banner.

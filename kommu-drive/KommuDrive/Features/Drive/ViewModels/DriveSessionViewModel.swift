@@ -76,7 +76,91 @@ final class DriveSessionViewModel: ObservableObject {
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
       self?.ble.autoConnectIfKnown()
     }
+
+    #if targetEnvironment(simulator)
+    latestFrame = DriveViewPreview.sampleFrame
+    _debugInjectIndicators(confidence: 0.82, steering: 0.6)
+    framesReceived = 256
+    startMockAnimation()
+    #endif
   }
+
+  #if targetEnvironment(simulator)
+  private var mockTimer: Timer?
+  private var mockTime: Double = 0
+
+  private func startMockAnimation() {
+    mockTimer?.invalidate()
+    mockTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+      Task { @MainActor in
+        self?.tickMockAnimation()
+      }
+    }
+  }
+
+  private func tickMockAnimation() {
+    mockTime += 0.05
+    let t = mockTime
+
+    let leadDist = 28.0 + 6.0 * sin(t * 0.7)
+    let speedMps = (68.0 + 7.0 * cos(t * 0.4)) / 3.6
+    let steerVal = 0.92 * sin(t * 1.1)
+    let confidence = 0.85 + 0.08 * sin(t * 0.5)
+
+    // Build curved winding path
+    let steps = 30
+    var px: [Double] = []
+    var py: [Double] = []
+    for i in 0..<steps {
+      let x = Double(i) * 3.0
+      let curveOffset = sin(t * 0.6 + Double(i) * 0.08) * 2.2
+      px.append(x)
+      py.append(curveOffset)
+    }
+
+    let l1Y = py.map { $0 - 5.5 }
+    let l2Y = py.map { $0 - 1.8 }
+    let l3Y = py.map { $0 + 1.8 }
+    let l4Y = py.map { $0 + 5.5 }
+
+    let mockFrame = DriveFrame(
+      frameId: 1000 + Int(t * 20),
+      path: PathData(x: px, y: py),
+      acceleration: nil,
+      laneLines: [PathData(x: px, y: l1Y), PathData(x: px, y: l2Y), PathData(x: px, y: l3Y), PathData(x: px, y: l4Y)],
+      roadEdges: [PathData(x: px, y: py.map { $0 - 6.5 }), PathData(x: px, y: py.map { $0 + 6.5 })],
+      leadOne: LeadData(status: 1, distance: leadDist, yRel: py.first ?? 0),
+      leadTwo: nil,
+      vEgoCluster: speedMps,
+      vCruiseCluster: 80.0 / 3.6,
+      enabled: true,
+      experimentalMode: false,
+      state: 1,
+      alertText1: nil,
+      alertText2: nil,
+      alertStatus: nil,
+      personality: 1,
+      isMetric: true,
+      dongleId: "kommu-sim-001",
+      confidence: confidence,
+      steeringLimit: steerVal,
+      vEgo: speedMps,
+      detectedCars: [
+        DetectedCar(x: leadDist, y: py.first ?? 0, probability: 0.95, speed: speedMps + 0.8)
+      ],
+      laneLineProbs: [0.9, 0.9, 0.9, 0.9],
+      roadEdgeStds: [0.1, 0.1]
+    )
+
+    latestFrame = mockFrame
+    framesReceived += 1
+    fps = 20.0
+    confidenceFilter.update(confidence)
+    steeringFilter.update(steerVal)
+    smoothedConfidence = confidenceFilter.value
+    smoothedSteeringLimit = steeringFilter.value
+  }
+  #endif
 
   // MARK: Public actions (called from views)
 

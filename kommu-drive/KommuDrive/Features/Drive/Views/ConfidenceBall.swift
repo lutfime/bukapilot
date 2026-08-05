@@ -1,84 +1,62 @@
 import SwiftUI
 
-/// Faithful Swift port of `selfdrive/ui/mici/onroad/confidence_ball.py`.
+/// Faithful Swift port of comma 4's confidence indicator.
 ///
-/// A vertical ball on the right edge that rises (moves up) and turns green as
-/// openpilot's confidence in the scene goes up; falls and turns red as it
-/// drops. Driven by `modelV2.meta.disengagePredictions` (field "cf" on BLE).
-///
-/// Confidence zones (ENGAGED), matching the device UI exactly:
-///   > 0.5  → green/cyan gradient   (0,255,204) → (0,255,38)
-///   0.2–0.5 → yellow/orange gradient (255,200,0) → (255,115,0)
-///   < 0.2  → red gradient          (255,0,21) → (255,0,89)
-/// DISENGAGED → dark gray, parked at the bottom.
+/// A sleek glowing status dot on the right side of the road view.
+/// - Engaged & High Confidence (>0.5): Vibrant glowing Green (#00FF80)
+/// - Engaged & Medium Confidence (0.2–0.5): Warning Amber/Orange (#FFB300)
+/// - Engaged & Low Confidence (<0.2): Alert Red (#FF2A4B)
+/// - Disengaged: Subtle Slate Gray
 struct ConfidenceBall: View {
 
-  /// Smoothed confidence in [0, 1]. The VM owns the first-order filter so the
-  /// view stays stateless and re-renders purely from this value.
+  /// Smoothed confidence in [0, 1].
   let smoothedConfidence: Double
 
-  /// true when openpilot is engaged (changes color set).
+  /// true when openpilot is engaged.
   let engaged: Bool
 
-  /// Track height available for vertical travel.
-  var trackHeight: CGFloat = 220
+  /// Track height available for subtle vertical motion.
+  var trackHeight: CGFloat = 100
 
   /// Ball radius.
-  var radius: CGFloat = 22
+  var radius: CGFloat = 12
 
   var body: some View {
-    GeometryReader { geo in
-      let h = min(trackHeight, geo.size.height)
-      // x in [-0.5, 1]: -0.5 parks at bottom, 1 rises to top.
-      // Map to vertical position: bottom (h - r) at x=-0.5, top (r) at x=1.
-      let clamped = max(-0.5, min(1.0, smoothedConfidence))
-      let span = 1.0 - (-0.5) // 1.5
-      let frac = (clamped - (-0.5)) / span
-      let ballY = h - (frac * (h - 2 * radius)) - radius
+    let clamped = max(0.0, min(1.0, smoothedConfidence))
+    let statusColor = ballColor(confidence: clamped, engaged: engaged)
 
-      ZStack {
-        // Track guide (subtle vertical line)
-        Capsule()
-          .fill(Color.white.opacity(engaged ? 0.06 : 0.03))
-          .frame(width: 2, height: h - 2 * radius)
-          .offset(y: radius)
+    ZStack {
+      // Outer ambient glow ring (comma 4 halo effect)
+      Circle()
+        .fill(statusColor.opacity(engaged ? 0.35 : 0.05))
+        .frame(width: radius * 3.2, height: radius * 3.2)
+        .blur(radius: 6)
 
-        // The ball with a vertical gradient.
-        let (top, bottom) = ballColors
-        Circle()
-          .fill(
-            LinearGradient(
-              colors: [top, bottom],
-              startPoint: .top, endPoint: .bottom
-            )
-          )
-          .frame(width: radius * 2, height: radius * 2)
-          .shadow(color: top.opacity(0.5), radius: 6, y: 0)
-          .offset(y: ballY - h / 2 + radius)
-      }
-      .frame(width: radius * 2 + 8, height: h)
-      .frame(maxHeight: h, alignment: .top)
+      // Main glowing status ball
+      Circle()
+        .fill(statusColor)
+        .frame(width: radius * 2, height: radius * 2)
+        .shadow(color: statusColor.opacity(engaged ? 0.8 : 0.2), radius: 8, x: 0, y: 0)
+        .overlay(
+          Circle()
+            .stroke(Color.white.opacity(engaged ? 0.6 : 0.2), lineWidth: 1.5)
+        )
     }
-    .frame(width: radius * 2 + 12, height: trackHeight)
-    .animation(.easeOut(duration: 0.12), value: smoothedConfidence)
+    .frame(width: radius * 3.5, height: trackHeight)
+    .animation(.easeInOut(duration: 0.2), value: smoothedConfidence)
+    .animation(.easeInOut(duration: 0.2), value: engaged)
   }
 
-  /// Returns (topColor, bottomColor) matching confidence_ball.py color zones.
-  private var ballColors: (Color, Color) {
-    if !engaged {
-      // DISENGAGED → dark gray parked at bottom.
-      return (Color(red: 50/255, green: 50/255, blue: 50/255),
-              Color(red: 13/255, green: 13/255, blue: 13/255))
+  private func ballColor(confidence: Double, engaged: Bool) -> Color {
+    guard engaged else {
+      return Color(red: 90/255, green: 100/255, blue: 115/255)
     }
-    if smoothedConfidence > 0.5 {
-      return (Color(red: 0/255, green: 255/255, blue: 204/255),
-              Color(red: 0/255, green: 255/255, blue: 38/255))
-    } else if smoothedConfidence > 0.2 {
-      return (Color(red: 255/255, green: 200/255, blue: 0/255),
-              Color(red: 255/255, green: 115/255, blue: 0/255))
+    if confidence > 0.5 {
+      return Color(red: 0/255, green: 235/255, blue: 130/255)  // Vibrant Comma 4 Green
+    } else if confidence > 0.2 {
+      return Color(red: 255/255, green: 175/255, blue: 0/255)  // Comma 4 Warning Amber
     } else {
-      return (Color(red: 255/255, green: 0/255, blue: 21/255),
-              Color(red: 255/255, green: 0/255, blue: 89/255))
+      return Color(red: 255/255, green: 42/255, blue: 75/255)   // Alert Red
     }
   }
 }

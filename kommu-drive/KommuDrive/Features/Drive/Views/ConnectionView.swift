@@ -208,6 +208,19 @@ struct ConnectionView: View {
       .buttonStyle(.bordered)
       .tint(.white)
 
+      #if DEBUG
+      Button {
+        viewModel.latestFrame = DriveViewPreview.sampleFrame
+        viewModel._debugInjectIndicators(confidence: 0.82, steering: 0.6)
+        viewModel.framesReceived = 256
+      } label: {
+        Label("Demo Drive", systemImage: "play.fill")
+          .font(.system(size: 13, weight: .semibold))
+      }
+      .buttonStyle(.borderedProminent)
+      .tint(Color.accentColor)
+      #endif
+
       Spacer()
 
       Text("KommuDrive · Phase 1")

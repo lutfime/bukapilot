@@ -1,8 +1,8 @@
 import SwiftUI
 
 #if DEBUG
-/// SwiftUI preview with synthetic data — proves the rendering pipeline without
-/// a real BLE connection. Lets us iterate on the visuals in Xcode previews.
+/// SwiftUI preview with synthetic data — proves the SceneKit rendering pipeline
+/// without a real BLE connection.
 struct DriveViewPreview: View {
   @StateObject private var vm: DriveSessionViewModel
 
@@ -60,9 +60,8 @@ struct DriveViewPreview: View {
     steeringLimit: 0.6,
     vEgo: 18.0,
     detectedCars: [
-      DetectedCar(x: 45, y: -2.5, probability: 0.7, speed: 16),   // car ahead-right
-      DetectedCar(x: 60, y: 3.0, probability: 0.5, speed: 20),    // car ahead-left
-      DetectedCar(x: 80, y: -1.0, probability: 0.3, speed: 22),   // distant car
+      DetectedCar(x: 45, y: -2.5, probability: 0.7, speed: 16),
+      DetectedCar(x: 60, y: 3.0, probability: 0.5, speed: 20),
     ],
     laneLineProbs: [0.9, 0.95, 0.85, 0.7],
     roadEdgeStds: [0.1, 0.15]

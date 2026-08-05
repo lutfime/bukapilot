@@ -127,6 +127,7 @@ def safe_put_all(settings_to_put, is_bool=False):
 # ever registered + params_pyx rebuilt, switch back to bool_keys/safe_put_all — the file
 # location already matches what Params.get_bool would read.
 X70_PID_TOGGLE_FILE = "/data/params/d/X70UsePidController"
+SUPERCOMBO_TOGGLE_FILE = "/data/params/d/UseSupercomboModel"
 
 def get_x70_pid_toggle():
   try:
@@ -145,6 +146,24 @@ def set_x70_pid_toggle(val):
     pass
   except OSError as e:
     cloudlog.error(f"Error setting X70UsePidController: {e}")
+
+def get_supercombo_toggle():
+  try:
+    return open(SUPERCOMBO_TOGGLE_FILE).read().strip() == "1"
+  except (FileNotFoundError, OSError):
+    return False
+
+def set_supercombo_toggle(val):
+  try:
+    if val:
+      with open(SUPERCOMBO_TOGGLE_FILE, "w") as f:
+        f.write("1")
+    else:
+      os.remove(SUPERCOMBO_TOGGLE_FILE)
+  except FileNotFoundError:
+    pass
+  except OSError as e:
+    cloudlog.error(f"Error setting UseSupercomboModel: {e}")
 
 def reset_calibration(state):
   if state == log.SelfdriveState.OpenpilotState.disabled:
@@ -394,6 +413,7 @@ class AppBridge:
       sett[key] = safe_get(key, False)
     sett['BrakeMagGain'] = safe_get('BrakeMagGain', False) if self.hw_helper.car_has_openpilot_long() else None
     sett['X70UsePidController'] = get_x70_pid_toggle()
+    sett['UseSupercomboModel'] = get_supercombo_toggle()
     try:
       self.ble.chunk_and_send(CHANNEL_SETTINGS, msgpack.packb(sett))
     except Exception as e:
@@ -425,6 +445,8 @@ class AppBridge:
         case 'saveToggle':
           if 'X70UsePidController' in settings:
             set_x70_pid_toggle(bool(settings.pop('X70UsePidController')))
+          if 'UseSupercomboModel' in settings:
+            set_supercombo_toggle(bool(settings.pop('UseSupercomboModel')))
           safe_put_all(settings, True)
         case 'saveConfig':
           if (car_name := settings.pop('CarName', None)) is not None:

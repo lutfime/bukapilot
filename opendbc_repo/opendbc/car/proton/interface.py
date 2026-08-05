@@ -59,7 +59,7 @@ class CarInterface(CarInterfaceBase):
       ret.steerRatio = 20.0             # MEASURED ~20-21 (CAN steer angle / IMU curvature / wheelbase); CarSpecs 15.0 & KA1 16.0 were ~30% low
       ret.steerActuatorDelay = 0.17     # measured ~170ms (cmd vs actual steer angle, full-rate rlog); KA1 had 0.13
       ret.tireStiffnessFactor = 0.9871  # KA1-measured (0.10's 0.7933 is a wrong Camry copy-paste)
-      ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0.0], [500]]  # STEER_MAX
+      ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0.0], [580]]  # STEER_MAX — ceiling is 598 (DBC 11-bit STEER_CMD) / 599 (panda PROTON_MAX_STEER_SEEN); 580 keeps 18-unit headroom
       # Longitudinal: restore release_ka2 gains (x70-ka2/staging had zeroed kp/ki). Shared across lateral mode.
       ret.longitudinalTuning.kpBP = [0.0, 5.0, 20.0]
       ret.longitudinalTuning.kpV  = [0.7, 0.5, 0.4]

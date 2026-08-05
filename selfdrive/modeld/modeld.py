@@ -59,6 +59,7 @@ VISION_RKNN_PATH = MODEL_DIR / os.getenv("RKNN_VISION_MODEL", "driving_vision.rk
 POLICY_RKNN_PATH = MODEL_DIR / os.getenv("RKNN_POLICY_MODEL", "driving_policy.rknn")
 SUPERCOMBO_RKNN_PATH = MODEL_DIR / os.getenv("RKNN_SUPERCOMBO_MODEL", "driving_supercombo.rknn")
 SUPERCOMBO_METADATA_PATH = MODEL_DIR / 'driving_supercombo_metadata.pkl'
+SUPERCOMBO_TOGGLE_FILE = Path('/data/params/d/UseSupercomboModel')
 
 def _use_rknn_driving() -> bool:
   """Use RKNN for driving model when configured .rknn files exist (default). Set USE_RKNN=0 to force tinygrad."""
@@ -68,14 +69,14 @@ def _use_rknn_driving() -> bool:
 
 def _use_rknn_supercombo() -> bool:
   """Use the fused 0.11 supercombo model. OFF by default — the 0.10 split model is the safe default.
-  Enable via the KommuDrive app toggle (writes UseSupercomboModel=1 to Params) OR env var
-  USE_SUPERCOMBO_MODEL=1. Both require the .rknn + metadata files present."""
-  from openpilot.common.params import Params
+  Enable via the KommuDrive app toggle (writes /data/params/d/UseSupercomboModel) OR env var
+  USE_SUPERCOMBO_MODEL=1. Both require the .rknn + metadata files present.
+  Reads the toggle file directly (no C++ Params rebuild needed)."""
   enabled = os.getenv('USE_SUPERCOMBO_MODEL', '0') == '1'
   if not enabled:
     try:
-      enabled = Params().get_bool("UseSupercomboModel")
-    except Exception:
+      enabled = SUPERCOMBO_TOGGLE_FILE.read_text().strip() == '1'
+    except (FileNotFoundError, OSError):
       pass
   if not enabled:
     return False

@@ -1,0 +1,2 @@
+In the latest code, the same lateral tuning values are used for all Proton cars. Maybe @iXcess can explain about this change.
+But initially when the code had separated values for each car, on the KA2 device, the steering felt very strong, and more difficult to override compared to KA1, changing the tuning values did not change the feeling when I tried.

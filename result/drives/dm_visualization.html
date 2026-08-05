@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Driver Monitoring Visualization</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #111; color: #ddd; font-family: Arial, sans-serif; padding: 30px; }
+h1 { font-size: 18px; margin-bottom: 5px; color: #fff; }
+.sub { color: #888; font-size: 13px; margin-bottom: 25px; }
+.wrap { display: flex; gap: 30px; flex-wrap: wrap; }
+
+/* Camera frame */
+.cam {
+  width: 420px; height: 315px; background: #1a1a2a; border: 2px solid #444;
+  border-radius: 8px; position: relative;
+}
+/* Center crosshair */
+.cam::before, .cam::after {
+  content: ''; position: absolute; background: #333;
+}
+.cam::before { width: 100%; height: 1px; top: 50%; }
+.cam::after { width: 1px; height: 100%; left: 50%; }
+.center-label {
+  position: absolute; top: calc(50% + 4px); left: calc(50% + 4px);
+  font-size: 10px; color: #444;
+}
+/* Face circle */
+.face-circle {
+  position: absolute; left: 41%; top: 41%;
+  transform: translate(-50%, -50%);
+  width: 50px; height: 65px; border: 2px solid #0d0; border-radius: 50%;
+  background: rgba(0, 200, 0, 0.1);
+}
+.face-tag {
+  position: absolute; top: 68px; left: -30px; width: 130px;
+  font-size: 11px; color: #0d0; text-align: center; line-height: 1.4;
+}
+.yaw-tag {
+  position: absolute; top: -20px; left: -10px; width: 120px;
+  font-size: 11px; color: #fc3; text-align: center;
+}
+/* Steering wheel */
+.wheel {
+  position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%);
+  width: 160px; height: 50px; border: 3px solid #333; border-bottom: none;
+  border-radius: 80px 80px 0 0; background: rgba(20,20,40,0.5);
+}
+.wheel-label {
+  position: absolute; bottom: 3px; left: 8px; font-size: 10px; color: #444;
+}
+/* Warning badge */
+.badge {
+  position: absolute; top: 8px; right: 8px;
+  background: rgba(255,50,50,0.25); color: #f55; border: 1px solid #f55;
+  padding: 4px 10px; border-radius: 4px; font-size: 11px; font-weight: bold;
+}
+
+/* Data panel */
+.panel { width: 380px; }
+.panel h2 { font-size: 15px; color: #fff; margin-bottom: 12px; }
+.row {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 6px 0; border-bottom: 1px solid #2a2a2a; font-size: 13px;
+}
+.row .lbl { color: #aaa; }
+.row .v-ok { color: #5d5; }
+.row .v-bad { color: #f55; font-weight: bold; }
+.row .v-warn { color: #fc3; }
+.box {
+  margin-top: 16px; padding: 14px; background: #1c1c2c; border-radius: 6px;
+  font-size: 12px; line-height: 1.6; color: #bbb;
+}
+.box b { color: #fff; }
+.box .red { color: #f55; }
+.box .grn { color: #5d5; }
+</style>
+</head>
+<body>
+
+<h1>Driver Monitoring Camera - What It Sees</h1>
+<p class="sub">Reconstructed from face-tracking data (Kommu 2 doesn't save driver-camera video). Drive: 2026-08-04, RHD (Malaysia).</p>
+
+<div class="wrap">
+  <div class="cam">
+    <span class="center-label">(0,0)</span>
+    <div class="face-circle">
+      <div class="yaw-tag">yaw: -17 degrees<br>(model thinks head turned)</div>
+      <div class="face-tag">Your face<br>X=-0.18, Y=+0.18<br>(9% off-center)</div>
+    </div>
+    <div class="wheel"></div>
+    <span class="wheel-label">steering wheel</span>
+    <div class="badge">DISTRACTED 89%</div>
+  </div>
+
+  <div class="panel">
+    <h2>Face Tracking Data</h2>
+    <div class="row"><span class="lbl">Face detected (faceProb)</span><span class="v-ok">95% (good)</span></div>
+    <div class="row"><span class="lbl">Face position X</span><span>-0.18 (9% left)</span></div>
+    <div class="row"><span class="lbl">Face position Y</span><span>+0.18 (9% up)</span></div>
+    <div class="row"><span class="lbl">Face yaw (head turn)</span><span class="v-bad">-0.30 rad (-17 deg)</span></div>
+    <div class="row"><span class="lbl">Distraction threshold</span><span>0.40 rad (23 deg)</span></div>
+    <div class="row"><span class="lbl">Calibrated deviation</span><span class="v-bad">~0.50 rad (29 deg)</span></div>
+    <div class="row"><span class="lbl">DM verdict</span><span class="v-bad">DISTRACTED (false)</span></div>
+    <div class="row"><span class="lbl">release_ka2 result</span><span class="v-ok">OK (different model)</span></div>
+
+    <div class="box">
+      <p><b>Root cause:</b> The 0.10 DM model <span class="red">misjudges your head yaw</span> - it estimates -17 degrees when you're looking straight ahead. This exceeds the 0.40 rad (23 deg) distraction threshold, triggering false warnings 70-89% of the drive.</p>
+      <br>
+      <p><b>Why leaning forward clears it:</b> Moving toward the wheel changes the face angle, the model's yaw estimate improves, and the warning clears.</p>
+      <br>
+      <p><b>Thresholds are the same</b> as release_ka2 (comma standard). The difference is the <span class="red">DM model</span> (0.10 is worse at this camera position). release_ka2 used a different model that handled this position better.</p>
+      <br>
+      <p><b>Recommendation:</b> Report to Kommu dev - the 0.10 dmonitoring model overestimates driver yaw at centered-mount RHD positions.</p>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

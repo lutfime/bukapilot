@@ -59,12 +59,15 @@ struct DriveView: View {
     }
     .onChange(of: viewModel.connectionState) { _, state in
       if state.isConnected {
-        viewModel.requestVisualisation()
+        // Request settings first — we need the dongleId from settings to auth
+        // subsequent visualisation requests. The ViewModel switches to
+        // visualisation automatically once settings arrive.
+        viewModel.requestSettings()
       }
     }
     .onAppear {
       if viewModel.connectionState.isConnected {
-        viewModel.requestVisualisation()
+        viewModel.requestSettings()
       }
     }
     .sheet(isPresented: $showSettings) {

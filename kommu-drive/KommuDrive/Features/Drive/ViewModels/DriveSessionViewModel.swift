@@ -203,6 +203,8 @@ final class DriveSessionViewModel: ObservableObject {
       confidence: confidence,
       steeringLimit: steerVal,
       vEgo: speedMps,
+      desiredSpeed: 80.0 / 3.6,
+      allowThrottle: true,
       detectedCars: [
         DetectedCar(x: leadDist, y: py.first ?? 0, probability: 0.95, speed: speedMps + 0.8)
       ],

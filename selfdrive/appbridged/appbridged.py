@@ -224,7 +224,9 @@ class AppBridge:
       'driverMonitoringState', 'carState',
       'uploaderState',
       # added for confidence ball + steering limit indicator (KommuDrive):
-      'controlsState', 'liveParameters'
+      'controlsState', 'liveParameters',
+      # added for desired speed + path color (throttle/brake):
+      'longitudinalPlan'
     ])
     self.rk = Ratekeeper(MESSAGE_HZ) # Ratekeeper for loop
     self.last_periodic_time = 0 # Track last periodic task
@@ -357,6 +359,15 @@ class AppBridge:
         data["sl"] = 0.0
     except Exception:
       data["sl"] = 0.0
+
+    # desired speed + throttle permission from longitudinalPlan.
+    # "ds" = model's desired speed (m/s), first of the planned speeds list.
+    # "at" = allowThrottle (bool) — used by the phone to color the path
+    #        green (throttle OK) vs blue (braking), matching comma's UI.
+    lp = sm['longitudinalPlan']
+    if len(lp.speeds):
+      data["ds"] = lp.speeds[0]
+    data["at"] = bool(lp.allowThrottle)
 
     data = quantize(data)
     try:

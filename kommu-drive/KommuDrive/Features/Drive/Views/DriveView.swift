@@ -20,48 +20,33 @@ struct DriveView: View {
           .frame(maxWidth: .infinity, maxHeight: .infinity)
           .ignoresSafeArea()
 
-        // Layer 2: SwiftUI HUD overlay — top info bar + bottom controls
+        // Layer 2: SwiftUI HUD overlay
         VStack(spacing: 0) {
           topBar
           Spacer()
-
-          // Bottom Bar: Driver Monitoring (Left), Steering Arc (Center), Confidence Dot (Right)
-          HStack(alignment: .center, spacing: 0) {
-            // Left: Comma 4 Steering Wheel / Driver Monitoring Badge
-            driverMonitoringBadge
-              .padding(.leading, 8)
-
-            Spacer()
-
-            // Center: Steering Limit Arc
-            SteeringLimitArc(
-              value: viewModel.smoothedSteeringLimit,
-              engaged: viewModel.latestFrame?.enabled ?? false
-            )
-            .frame(width: 180, height: 75)
-
-            Spacer()
-
-            // Right: Comma 4 Confidence Status Ball
-            ConfidenceBall(
-              smoothedConfidence: viewModel.smoothedConfidence,
-              engaged: viewModel.latestFrame?.enabled ?? false,
-              trackHeight: 60,
-              radius: 10
-            )
-            .padding(.trailing, 8)
-          }
-          .padding(.bottom, 12)
         }
         .padding(.horizontal, 8)
         .padding(.top, 2)
+
+        // Confidence ball at bottom-left
+        VStack {
+          Spacer()
+          HStack {
+            ConfidenceBall(
+              smoothedConfidence: viewModel.smoothedConfidence,
+              engaged: viewModel.latestFrame?.enabled ?? false,
+              trackHeight: min(geo.size.height * 0.3, 140),
+              radius: 14
+            )
+            .padding(.leading, 6)
+            .padding(.bottom, 6)
+            Spacer()
+          }
+        }
       }
     }
     .onChange(of: viewModel.connectionState) { _, state in
       if state.isConnected {
-        // Request settings first — we need the dongleId from settings to auth
-        // subsequent visualisation requests. The ViewModel switches to
-        // visualisation automatically once settings arrive.
         viewModel.requestSettings()
       }
     }
@@ -82,7 +67,10 @@ struct DriveView: View {
     let frame = viewModel.latestFrame
     let isMetric = frame?.isMetric ?? viewModel.settings.isMetric
     let speed = formatSpeed(frame?.vEgoCluster ?? 0, isMetric: isMetric)
-    let target = formatSpeed(frame?.vCruiseCluster ?? 0, isMetric: isMetric)
+    // Show the MODEL's desired speed (longitudinalPlan.speeds[0]), not the
+    // cruise control set speed (that's already on the car's dashboard).
+    let desired = frame?.desiredSpeed
+    let target = desired != nil ? formatSpeed(desired!, isMetric: isMetric) : "—"
     let speedUnit = isMetric ? "km/h" : "mph"
 
     return HStack(alignment: .top, spacing: 8) {
@@ -102,7 +90,7 @@ struct DriveView: View {
       // Right: target speed + gear button
       VStack(alignment: .trailing, spacing: 4) {
         HStack(alignment: .top, spacing: 8) {
-          speedBadge(value: target, unit: speedUnit, label: "TARGET", accent: true)
+          speedBadge(value: target, unit: speedUnit, label: "MODEL", accent: true)
           Button {
             showSettings = true
           } label: {
@@ -162,23 +150,6 @@ struct DriveView: View {
       Text(hasLead ? String(format: "%.1f m", distance) : "no lead")
         .font(.system(size: 13, weight: .semibold, design: .rounded))
         .foregroundStyle(hasLead ? .primary : .secondary)
-    }
-  }
-
-  /// Comma 4 Steering Wheel / Driver Monitoring Badge (Bottom Left)
-  private var driverMonitoringBadge: some View {
-    let enabled = viewModel.latestFrame?.enabled ?? false
-    let ringColor: Color = enabled ? Color(red: 0/255, green: 235/255, blue: 130/255) : Color.white.opacity(0.3)
-    return ZStack {
-      Circle()
-        .fill(Color.black.opacity(0.55))
-        .frame(width: 38, height: 38)
-      Circle()
-        .stroke(ringColor, lineWidth: 2.5)
-        .frame(width: 38, height: 38)
-      Image(systemName: "steeringwheel")
-        .font(.system(size: 19, weight: .bold))
-        .foregroundStyle(enabled ? .white : .secondary)
     }
   }
 

@@ -240,21 +240,27 @@ final class DriveSceneRenderer {
       return
     }
 
-    // 1. Uniform green corridor fill (unlit constant material = zero lighting splits)
+    // Path color: green when allowThrottle is true, blue when braking.
+    // Uses longitudinalPlan.allowThrottle — same signal comma's UI uses.
     let pathWidth: CGFloat = 0.48
-    let greenCorridor = UIColor(red: 0/255, green: 225/255, blue: 115/255, alpha: 0.38)
-    let ribbon = DriveSceneRenderer.makeRibbonGeometry(path: path, halfWidth: pathWidth, color: greenCorridor, yOffset: 0.012)
+    let allowThrottle = frame.allowThrottle ?? true
+    let corridorColor: UIColor = allowThrottle
+      ? UIColor(red: 0/255, green: 225/255, blue: 115/255, alpha: 0.38)    // green when throttle OK
+      : UIColor(red: 60/255, green: 140/255, blue: 255/255, alpha: 0.35)   // blue when braking
+    let ribbon = DriveSceneRenderer.makeRibbonGeometry(path: path, halfWidth: pathWidth, color: corridorColor, yOffset: 0.012)
     pathNode.geometry = ribbon
 
-    // 2. Glowing bright green left & right borders (comma 4 signature look)
+    // Glowing borders match the corridor color
     let borderWidth: CGFloat = 0.035
-    let brightGreen = UIColor(red: 0/255, green: 255/255, blue: 130/255, alpha: 0.90)
+    let brightColor: UIColor = allowThrottle
+      ? UIColor(red: 0/255, green: 255/255, blue: 130/255, alpha: 0.90)
+      : UIColor(red: 100/255, green: 170/255, blue: 255/255, alpha: 0.90)
 
     let leftPath = DriveSceneRenderer.offsetPath(path, offset: Double(pathWidth))
     let rightPath = DriveSceneRenderer.offsetPath(path, offset: Double(-pathWidth))
 
-    pathLeftEdgeNode.geometry = DriveSceneRenderer.makeRibbonGeometry(path: leftPath, halfWidth: borderWidth, color: brightGreen, yOffset: 0.014)
-    pathRightEdgeNode.geometry = DriveSceneRenderer.makeRibbonGeometry(path: rightPath, halfWidth: borderWidth, color: brightGreen, yOffset: 0.014)
+    pathLeftEdgeNode.geometry = DriveSceneRenderer.makeRibbonGeometry(path: leftPath, halfWidth: borderWidth, color: brightColor, yOffset: 0.014)
+    pathRightEdgeNode.geometry = DriveSceneRenderer.makeRibbonGeometry(path: rightPath, halfWidth: borderWidth, color: brightColor, yOffset: 0.014)
 
     SCNTransaction.begin()
     SCNTransaction.animationDuration = 0.15

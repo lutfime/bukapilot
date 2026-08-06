@@ -59,6 +59,8 @@ struct DriveViewPreview: View {
     confidence: 0.82,
     steeringLimit: 0.6,
     vEgo: 18.0,
+    desiredSpeed: 22.0,
+    allowThrottle: true,
     detectedCars: [
       DetectedCar(x: 45, y: -2.5, probability: 0.7, speed: 16),
       DetectedCar(x: 60, y: 3.0, probability: 0.5, speed: 20),

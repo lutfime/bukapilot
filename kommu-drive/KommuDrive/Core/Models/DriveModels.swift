@@ -89,6 +89,12 @@ struct DriveFrame: Equatable {
   /// the phone if we ever extend it. May differ slightly from vEgoCluster.
   let vEgo: Double?
 
+  /// Model's desired speed (m/s) from longitudinalPlan.speeds[0]. Key "ds".
+  let desiredSpeed: Double?
+
+  /// allowThrottle from longitudinalPlan — true = path green, false = braking/blue. Key "at".
+  let allowThrottle: Bool?
+
   /// All cars detected by the model (leadsV3), not just the radar lead.
   /// Each entry: {x: meters ahead, y: meters left, p: probability, v: speed m/s}.
   let detectedCars: [DetectedCar]
@@ -190,6 +196,8 @@ enum DriveFrameDecoder {
       confidence: doubleField("cf"),
       steeringLimit: doubleField("sl"),
       vEgo: doubleField("vEgo"),
+      desiredSpeed: doubleField("ds"),
+      allowThrottle: boolField("at"),
       detectedCars: detectedCars,
       laneLineProbs: laneLineProbs,
       roadEdgeStds: roadEdgeStds

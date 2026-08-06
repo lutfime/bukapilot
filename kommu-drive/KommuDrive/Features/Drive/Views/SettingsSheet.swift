@@ -16,6 +16,10 @@ struct SettingsSheet: View {
   @State private var sshEnabled: Bool = false
   @State private var usePidController: Bool = false
   @State private var useSupercomboModel: Bool = false
+  // Once the user taps a PID/model toggle, stop echo-syncing it so the displayed
+  // value doesn't get overwritten by a lagging echo and visually "dance" on/off.
+  @State private var pidTouched: Bool = false
+  @State private var modelTouched: Bool = false
 
   @State private var showRebootConfirm = false
   @State private var wifiPasswordEntry: WifiNetwork? = nil
@@ -102,14 +106,14 @@ struct SettingsSheet: View {
 
   private var softwareSettingsSection: some View {
     Section {
-      toggleRow("Experimental Mode", isOn: $experimentalMode, key: "ConditionalExperimentalMode")
-      toggleRow("Assisted Lane Change", isOn: $assistedLaneChange, key: "IsAlcEnabled")
-      toggleRow("Lane Departure Warning", isOn: $laneDepartureWarning, key: "IsLdwEnabled")
-      toggleRow("Quiet Mode", isOn: $quietMode, key: "QuietMode")
-      toggleRow("Record Driver Camera", isOn: $recordDriverCamera, key: "RecordFront")
-      toggleRow("SSH", isOn: $sshEnabled, key: "SshEnabled")
-      toggleRow("PID Steering (X70)", isOn: $usePidController, key: "X70UsePidController")
-      toggleRow("0.11 Model (beta)", isOn: $useSupercomboModel, key: "UseSupercomboModel")
+      toggleRow("Experimental Mode", isOn: $experimentalMode, key: "ConditionalExperimentalMode", deviceValue: viewModel.settings.experimentalMode)
+      toggleRow("Assisted Lane Change", isOn: $assistedLaneChange, key: "IsAlcEnabled", deviceValue: viewModel.settings.alcEnabled)
+      toggleRow("Lane Departure Warning", isOn: $laneDepartureWarning, key: "IsLdwEnabled", deviceValue: viewModel.settings.ldwEnabled)
+      toggleRow("Quiet Mode", isOn: $quietMode, key: "QuietMode", deviceValue: viewModel.settings.quietMode)
+      toggleRow("Record Driver Camera", isOn: $recordDriverCamera, key: "RecordFront", deviceValue: viewModel.settings.recordFront)
+      toggleRow("SSH", isOn: $sshEnabled, key: "SshEnabled", deviceValue: viewModel.settings.sshEnabled)
+      toggleRow("PID Steering (X70)", isOn: $usePidController, key: "X70UsePidController", deviceValue: viewModel.settings.usePidController, touched: $pidTouched)
+      toggleRow("0.11 Model (beta)", isOn: $useSupercomboModel, key: "UseSupercomboModel", deviceValue: viewModel.settings.useSupercomboModel, touched: $modelTouched)
     } header: {
       Text("Software Settings")
     } footer: {
@@ -290,9 +294,14 @@ struct SettingsSheet: View {
 
   // MARK: Helpers
 
-  private func toggleRow(_ title: String, isOn: Binding<Bool>, key: String) -> some View {
+  private func toggleRow(_ title: String, isOn: Binding<Bool>, key: String, deviceValue: Bool, touched: Binding<Bool>? = nil) -> some View {
     Toggle(title, isOn: isOn)
       .onChange(of: isOn.wrappedValue) { _, newValue in
+        // Only save on a real USER change (not a syncToggles echo overwrite).
+        guard newValue != deviceValue else { return }
+        // Mark "user owns this toggle" so syncToggles stops echoing it back —
+        // otherwise the lagging echo flips the displayed value on/off = "dance".
+        touched?.wrappedValue = true
         viewModel.saveToggle(key, value: newValue)
       }
   }
@@ -309,15 +318,17 @@ struct SettingsSheet: View {
   }
 
   private func syncToggles() {
-    // All toggles sync from the device echo each frame (they write immediately on tap).
+    // All toggles sync from the device echo each frame — EXCEPT PID/0.11 once the
+    // user has tapped them (pidTouched/modelTouched), so a lagging echo can't flip
+    // the displayed value back and "dance" the toggle on/off.
     experimentalMode = viewModel.settings.experimentalMode
     assistedLaneChange = viewModel.settings.alcEnabled
     quietMode = viewModel.settings.quietMode
     laneDepartureWarning = viewModel.settings.ldwEnabled
     recordDriverCamera = viewModel.settings.recordFront
     sshEnabled = viewModel.settings.sshEnabled
-    usePidController = viewModel.settings.usePidController
-    useSupercomboModel = viewModel.settings.useSupercomboModel
+    if !pidTouched { usePidController = viewModel.settings.usePidController }
+    if !modelTouched { useSupercomboModel = viewModel.settings.useSupercomboModel }
   }
 }
 

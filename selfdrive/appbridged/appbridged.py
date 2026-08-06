@@ -126,8 +126,11 @@ def safe_put_all(settings_to_put, is_bool=False):
 # KommuDrive app reads/writes it as a raw file at the path Params would use. If the key is
 # ever registered + params_pyx rebuilt, switch back to bool_keys/safe_put_all — the file
 # location already matches what Params.get_bool would read.
-X70_PID_TOGGLE_FILE = "/data/params/d/X70UsePidController"
-SUPERCOMBO_TOGGLE_FILE = "/data/params/d/UseSupercomboModel"
+X70_PID_TOGGLE_FILE = "/data/params/X70UsePidController"
+SUPERCOMBO_TOGGLE_FILE = "/data/params/UseSupercomboModel"
+# NOTE: these live in /data/params/ (NOT /data/params/d/). openpilot's clearAll
+# (params.cc) deletes ANY file in d/ that isn't in params_keys.h on every boot —
+# since these keys can't be registered (no C++ rebuild), they must sit outside d/.
 
 def get_x70_pid_toggle():
   # DEFAULT = PID: absent file or "1" -> PID (True); "0" -> torque (False).
@@ -451,6 +454,7 @@ class AppBridge:
         return
       match settings.pop('msgType', None):
         case 'saveToggle':
+          cloudlog.info(f"saveToggle received: {dict(settings)}")  # diagnostic: confirm app toggles reach the device
           if 'X70UsePidController' in settings:
             set_x70_pid_toggle(bool(settings.pop('X70UsePidController')))
           if 'UseSupercomboModel' in settings:

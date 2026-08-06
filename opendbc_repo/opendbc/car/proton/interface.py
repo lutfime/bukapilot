@@ -66,12 +66,11 @@ class CarInterface(CarInterfaceBase):
       ret.longitudinalTuning.kiV  = [0.2, 0.15, 0.1]
       ret.longitudinalActuatorDelay = 0.45  # release_ka2 used 0.4-0.5; x70-ka2 base was 0.6
       # --- Lateral controller toggle (KommuDrive app). DEFAULT = PID (KA1-tuned: smooth, no
-      # low-speed railing). Torque is opt-in (toggle file = "0"). Stored as a raw file (key not in
-      # params_keys.h, device can't rebuild params_pyx). KommuDrive writes /data/params/d/
-      # X70UsePidController = "1" (PID, default) or "0" (torque). If the key is ever registered +
-      # params_pyx rebuilt, this is the exact file Params.get_bool reads, so switching back is seamless.
+      # low-speed railing). Torque is opt-in (toggle file = "0"). Stored as a raw file in /data/params/
+      # (NOT /data/params/d/ — clearAll deletes unregistered files in d/ on every boot). KommuDrive
+      # writes /data/params/X70UsePidController = "1" (PID, default) or "0" (torque).
       try:
-        with open("/data/params/d/X70UsePidController") as _f:
+        with open("/data/params/X70UsePidController") as _f:
           _use_pid = _f.read().strip() != "0"
       except (FileNotFoundError, OSError):
         _use_pid = True

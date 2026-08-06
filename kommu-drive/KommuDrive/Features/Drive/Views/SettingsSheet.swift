@@ -14,27 +14,19 @@ struct SettingsSheet: View {
   @State private var laneDepartureWarning: Bool = false
   @State private var recordDriverCamera: Bool = false
   @State private var sshEnabled: Bool = false
+  @State private var usePidController: Bool = false
+  @State private var useSupercomboModel: Bool = false
 
   @State private var showRebootConfirm = false
   @State private var wifiPasswordEntry: WifiNetwork? = nil
   @State private var wifiPasswordInput = ""
   @State private var showForgetWifiConfirm = false
 
-  // Model/PID toggles use pending values on the ViewModel so they survive
-  // sheet open/close. nil = use device's current value.
-  private var pidToggleValue: Bool {
-    viewModel.pendingPidToggle ?? viewModel.settings.usePidController
-  }
-  private var modelToggleValue: Bool {
-    viewModel.pendingModelToggle ?? viewModel.settings.useSupercomboModel
-  }
-
   var body: some View {
     NavigationStack {
       List {
         deviceSection
         softwareSettingsSection
-        restartRequiredSection
         updateSection
         wifiSection
         deviceActionsSection
@@ -59,25 +51,12 @@ struct SettingsSheet: View {
       .onReceive(viewModel.$settings) { _ in syncToggles() }
       .alert("Reboot device?", isPresented: $showRebootConfirm) {
         Button("Reboot", role: .destructive) {
-          // Send any pending model/PID toggles BEFORE reboot so they take effect.
-          if let pid = viewModel.pendingPidToggle {
-            viewModel.saveToggle("X70UsePidController", value: pid)
-          }
-          if let model = viewModel.pendingModelToggle {
-            viewModel.saveToggle("UseSupercomboModel", value: model)
-          }
-          viewModel.pendingPidToggle = nil
-          viewModel.pendingModelToggle = nil
           viewModel.rebootDevice()
           dismiss()
         }
         Button("Cancel", role: .cancel) {}
       } message: {
-        if hasPendingModelChanges {
-          Text("The device will restart with your model/steering changes applied. This only works when openpilot is disabled.")
-        } else {
-          Text("The device will restart. This only works when openpilot is disabled.")
-        }
+        Text("The device will restart. This only works when openpilot is disabled.")
       }
       .alert("Forget Wi-Fi?", isPresented: $showForgetWifiConfirm) {
         Button("Forget", role: .destructive) {
@@ -129,51 +108,13 @@ struct SettingsSheet: View {
       toggleRow("Quiet Mode", isOn: $quietMode, key: "QuietMode")
       toggleRow("Record Driver Camera", isOn: $recordDriverCamera, key: "RecordFront")
       toggleRow("SSH", isOn: $sshEnabled, key: "SshEnabled")
+      toggleRow("PID Steering (X70)", isOn: $usePidController, key: "X70UsePidController")
+      toggleRow("0.11 Model (beta)", isOn: $useSupercomboModel, key: "UseSupercomboModel")
     } header: {
       Text("Software Settings")
     } footer: {
-      Text("Changes are sent to the device immediately.")
+      Text("Changes are sent to the device immediately. PID/model take effect on the next drive.")
     }
-  }
-
-  /// Settings that need a device restart to take effect (modeld, PID controller).
-  /// Changes are stored on the ViewModel so they survive sheet open/close.
-  private var restartRequiredSection: some View {
-    Section {
-      restartToggleRow("PID Steering (X70)",
-                        isOn: Binding(get: { pidToggleValue },
-                                      set: { viewModel.pendingPidToggle = $0 }),
-                        deviceValue: viewModel.settings.usePidController)
-      restartToggleRow("0.11 Model (beta)",
-                        isOn: Binding(get: { modelToggleValue },
-                                      set: { viewModel.pendingModelToggle = $0 }),
-                        deviceValue: viewModel.settings.useSupercomboModel)
-
-      if hasPendingModelChanges {
-        HStack {
-          Image(systemName: "exclamationmark.triangle.fill")
-            .foregroundStyle(.orange)
-          Text("Changes apply after device restart")
-            .font(.system(size: 13))
-            .foregroundStyle(.orange)
-          Spacer()
-          Button("Restart Now") {
-            showRebootConfirm = true
-          }
-          .buttonStyle(.borderedProminent)
-          .tint(.orange)
-        }
-      }
-    } header: {
-      Text("Model & Steering (Requires Restart)")
-    } footer: {
-      Text("These settings change which driving model runs on the NPU. They only take effect after the device restarts.")
-    }
-  }
-
-  /// True if any model/PID toggle differs from the device's current state.
-  private var hasPendingModelChanges: Bool {
-    viewModel.pendingPidToggle != nil || viewModel.pendingModelToggle != nil
   }
 
   // Single-row update section: shows current state and a context-appropriate
@@ -356,27 +297,6 @@ struct SettingsSheet: View {
       }
   }
 
-  /// Toggle for settings that need a device restart. Shows the toggle but does
-  /// NOT send immediately — it only updates local state. The change is sent to
-  /// the device when the user taps "Restart Now" (which sends all pending model
-  /// toggles via saveToggle, then triggers reboot).
-  private func restartToggleRow(_ title: String, isOn: Binding<Bool>,
-                                 deviceValue: Bool) -> some View {
-    HStack {
-      Toggle(title, isOn: isOn)
-      if isOn.wrappedValue != deviceValue {
-        Image(systemName: "circle.fill")
-          .foregroundStyle(.orange)
-          .font(.system(size: 8))
-      }
-    }
-    .onChange(of: isOn.wrappedValue) { _, newValue in
-      if newValue != deviceValue {
-        AppLog.info("queued toggle=\(newValue) (pending restart)")
-      }
-    }
-  }
-
   private func infoRow(_ label: String, _ value: String) -> some View {
     HStack {
       Text(label)
@@ -389,15 +309,15 @@ struct SettingsSheet: View {
   }
 
   private func syncToggles() {
-    // Live toggles — always sync from device (they change on the device side too)
+    // All toggles sync from the device echo each frame (they write immediately on tap).
     experimentalMode = viewModel.settings.experimentalMode
     assistedLaneChange = viewModel.settings.alcEnabled
     quietMode = viewModel.settings.quietMode
     laneDepartureWarning = viewModel.settings.ldwEnabled
     recordDriverCamera = viewModel.settings.recordFront
     sshEnabled = viewModel.settings.sshEnabled
-    // Model/PID toggles are NOT synced here — they use pending values stored
-    // on the ViewModel so they survive sheet open/close.
+    usePidController = viewModel.settings.usePidController
+    useSupercomboModel = viewModel.settings.useSupercomboModel
   }
 }
 

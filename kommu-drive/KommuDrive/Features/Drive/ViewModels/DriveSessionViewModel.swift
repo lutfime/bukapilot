@@ -41,12 +41,6 @@ final class DriveSessionViewModel: ObservableObject {
   /// Passthrough of BLE connection state for the connection screen.
   @Published private(set) var connectionState: BLEConnectionState = .disconnected
 
-  /// Pending model/PID toggle values that haven't been sent to the device yet.
-  /// nil = no pending change (use device value). Stored here so they survive
-  /// SettingsSheet open/close cycles.
-  @Published var pendingPidToggle: Bool? = nil
-  @Published var pendingModelToggle: Bool? = nil
-
   // Republished BLE discovery state — SwiftUI views observe the ViewModel, so
   // these mirrors are needed for the ConnectionView list to update in real time.
   @Published private(set) var discoveredPeripherals: [BLEManager.DiscoveredPeripheral] = []

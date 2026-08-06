@@ -80,7 +80,7 @@ class CarInterface(CarInterfaceBase):
         # Low kpV[0]=0.0005 = the smooth, no-wobble/no-reengage-slam feel KA1 had (vs torque's huge low-speed kp).
         ret.lateralTuning.init("pid")
         ret.lateralTuning.pid.kpBP = [0.0, 5.0, 15.0, 25.0, 35.0]
-        ret.lateralTuning.pid.kpV  = [0.0005, 0.02, 0.06, 0.14, 0.17]
+        ret.lateralTuning.pid.kpV  = [0.0005, 0.02, 0.045, 0.10, 0.17]  # cut ~25-29% at 54/90 km/h to damp corner overshoot (comma #599: Kp x laggy feedback = oscillation). 0/18/126 km/h unchanged (no data). ITERATE: verify overshoot shrinks on next drive.
         ret.lateralTuning.pid.kiBP = [0.0, 5.0, 15.0, 25.0, 35.0]
         ret.lateralTuning.pid.kiV  = [0.001, 0.01, 0.09, 0.4, 0.5]
         ret.lateralTuning.pid.kf   = 0.000006

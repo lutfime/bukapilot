@@ -111,7 +111,7 @@ class TorqueEstimator(ParameterEstimator):
               'latAccelOffset': cache_ltp.latAccelOffsetFiltered,
               'frictionCoefficient': cache_ltp.frictionCoefficientFiltered
             }
-          initial_params['points'] = cache_ltp.points
+          initial_params['points'] = [list(point) for point in cache_ltp.points]
           self.decay = cache_ltp.decay
           self.filtered_points.load_points(initial_params['points'])
           cloudlog.info("restored torque params from cache")
@@ -180,7 +180,8 @@ class TorqueEstimator(ParameterEstimator):
       self.lag = msg.lateralDelay
     # calculate lateral accel from past steering torque
     elif which == "livePose":
-      if len(self.raw_points['steer_torque']) == self.hist_len:
+      is_valid = msg.angularVelocityDevice.valid and msg.orientationNED.valid and msg.inputsOK and msg.sensorsOK and msg.posenetOK
+      if len(self.raw_points['steer_torque']) == self.hist_len and is_valid:
         device_pose = Pose.from_live_pose(msg)
         calibrated_pose = self.calibrator.build_calibrated_pose(device_pose)
         angular_velocity_calibrated = calibrated_pose.angular_velocity
@@ -266,7 +267,7 @@ def main(demo=False):
     # Cache points every 60 seconds while onroad
     if sm.frame % 240 == 0:
       msg = estimator.get_msg(valid=sm.all_checks(), with_points=True)
-      params.put_nonblocking("LiveTorqueParameters", msg.to_bytes())
+      params.put("LiveTorqueParameters", msg.to_bytes())
 
 
 if __name__ == "__main__":

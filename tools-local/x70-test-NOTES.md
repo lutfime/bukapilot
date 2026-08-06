@@ -233,6 +233,72 @@ same input/output contract; we're using the standard one.
 
 ---
 
+## Upstream ports: lateral quality + cache reliability (2026-08-06)
+
+Ported 5 improvements from upstream openpilot `master` (post-0.11.2) that improve
+lateral steering quality and cache reliability. All affect both the 0.10 and 0.11 models
+(controller-side, not model-side).
+
+### Which items help which controller?
+
+| # | Change | File | PID? | Torque? | X70 value |
+|---|--------|------|------|---------|-----------|
+| 1 | livePose validity gate | torqued.py | ❌ No | ✅ Yes | Inert on PID |
+| 2 | lag-estimation overhaul | lagd.py | ✅ Yes | ✅ Yes | **High** — feeds PID delay compensation |
+| 3 | MIN_STABLE_DELAY curvature fix | drive_helpers.py | ✅ Yes | ✅ Yes | **High** — fixes curvature target stability |
+| 4 | delay buffer + unconditional update | latcontrol_torque.py | ❌ No | ✅ Yes | Inert on PID |
+| 5 | cache deserialization + put→put | torqued.py, paramsd.py | ✅ paramsd only | ✅ both | **Medium** — prevents losing learned params |
+
+**If using PID (X70's preferred controller per Kommu dev + user testing):** items 2, 3,
+and the paramsd cache fix (5a) are the real improvements. Items 1, 4, and the torqued
+cache fix (5b) are inert — torqued doesn't run when PID is active. They're kept in case
+of future switch to torque, but do nothing on PID.
+
+**If using torque:** all 5 are active and mutually reinforcing (the "lateral bundle").
+
+### Why the torque controller may still wobble on X70
+Kommu's dev tested torque vs PID on the X70 and found PID better. The X70's EPS may not
+match the torque controller's linearity assumptions. These ported fixes improve the
+*accuracy* of the torque controller's delay compensation and buffer, but won't fix a
+fundamental mismatch between the controller's assumptions and the car's steering dynamics.
+If torque still wobbles after these fixes, PID remains the right choice for the X70.
+
+### Details of each port
+
+**Item 1 — torqued.py livePose validity gate** (2 lines):
+Rejects bad/inconsistent pose samples before they corrupt the torque learner.
+`is_valid = msg.angularVelocityDevice.valid and msg.orientationNED.valid and
+msg.inputsOK and msg.sensorsOK and msg.posenetOK`. Only runs when torque is active.
+
+**Item 2 — lagd.py lag-estimation overhaul** (~50 lines):
+- `MIN_VEGO` 15→22.35 m/s (only estimate at highway speeds)
+- `MAX_LAG` 1.0→0.65, new `MIN_LAG=0.15` (realistic bounds)
+- `MIN_LAT_ACCEL_RANGE=0.5` (skip when no lateral-accel signal)
+- New `masked_symmetric_moving_average()` pre-smoothing (Gaussian, k=5, σ=1.0)
+- `actuator_delay()` now takes `min_lag`, separate threshold/confidence ROIs
+- `lateralDelay` clamped to `[MIN_LAG, MAX_LAG]`
+- Cache write: `put_nonblocking` → `put`
+This is the **single biggest lever** for lateral quality on both controllers — the delay
+estimate feeds PID's `lat_delay` and torque's `delay_frames`.
+
+**Item 3 — drive_helpers.py MIN_STABLE_DELAY fix** (~10 lines):
+- New `MIN_STABLE_DELAY = 0.3` constant
+- `get_accel_from_plan` and `get_curvature_from_plan` linearly interpolate when
+  `action_t < 0.3s` instead of extrapolating → prevents unstable/jumpy curvature/accel
+  targets. Targets the P-term wobble at the root.
+
+**Item 4 — latcontrol_torque.py delay buffer fix** (refactored):
+- Moved curvature/buffer/error/ff block before `if not active` (unconditional — buffer
+  keeps updating when disengaged for faster re-engage)
+- Added `+ 1` to `delay_frames` computation
+- Saturation check: `steer_saturation_threshold` → `steer_max`
+
+**Item 5 — cache deserialization + blocking-write fixes** (3 lines):
+- torqued: `[list(point) for point in cache_ltp.points]` (fixes capnp-numpy edge case)
+- torqued + paramsd + lagd: `put_nonblocking` → `put` (reliability)
+
+---
+
 ## The exact modeld.py changes needed (do these on-device, you can iterate against real errors)
 
 bukapilot's `modeld.py` is heavily customized (OpenCL warp via `DrivingModelFrame`, KA2 X-offset,

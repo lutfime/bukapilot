@@ -329,10 +329,21 @@ extension BLEManager: CBCentralManagerDelegate {
     let lower = resolvedName.lowercased()
     let looksLikeKA2 = lower.contains("kommu") || lower.contains("ka2")
     let isGeneric = Self.ignoredNames.contains(lower)
-    // A strong-signal Unknown with no services is very likely the KA2 — its
-    // advertisement is minimal and the name rides in the scan response.
     let isStrongUnknown = isGeneric && rssi >= -60
     let likelyKA2 = (advertisedUART || looksLikeKA2 || isStrongUnknown) && true
+
+    // AUTO-CONNECT: if we have a saved device ID and this peripheral matches,
+    // connect immediately without requiring the user to tap.
+    if autoReconnectEnabled,
+       let savedID = lastConnectedID,
+       peripheral.identifier == savedID,
+       connectedPeripheral == nil,
+       !connectionState.isConnected {
+      AppLog.info("autoConnect: found saved device \(resolvedName) in scan, connecting")
+      stopScan()
+      connect(peripheral: peripheral, name: resolvedName)
+      return
+    }
 
     let entry = DiscoveredPeripheral(id: peripheral.identifier, name: resolvedName,
                                      rssi: rssi, likelyKA2: likelyKA2)

@@ -41,6 +41,12 @@ final class DriveSessionViewModel: ObservableObject {
   /// Passthrough of BLE connection state for the connection screen.
   @Published private(set) var connectionState: BLEConnectionState = .disconnected
 
+  /// Pending model/PID toggle values that haven't been sent to the device yet.
+  /// nil = no pending change (use device value). Stored here so they survive
+  /// SettingsSheet open/close cycles.
+  @Published var pendingPidToggle: Bool? = nil
+  @Published var pendingModelToggle: Bool? = nil
+
   // Republished BLE discovery state — SwiftUI views observe the ViewModel, so
   // these mirrors are needed for the ConnectionView list to update in real time.
   @Published private(set) var discoveredPeripherals: [BLEManager.DiscoveredPeripheral] = []
@@ -222,17 +228,30 @@ final class DriveSessionViewModel: ObservableObject {
   func disconnect() { ble.disconnect() }
 
   /// Tell the device which channel the app is currently viewing.
-  /// Mirrors `appbridged.py:handle_send_channel`'s `msgType: 'curPage'` flow.
-  ///
-  /// IMPORTANT: the curPage message must be sent on channel 0x01 (visualisation)
-  /// because the device sets `send_channel = c` (the incoming channel). If we
-  /// send it on 0x02, the device would stream settings, not visualisation.
+  /// Tell the device to stream visualisation frames (channel 0x01).
   func requestVisualisation() {
-    let payload: [String: Any] = [
-      "msgType": "curPage",
-    ]
+    var payload: [String: Any] = ["msgType": "curPage"]
+    if let dongle = settings.dongleID {
+      payload["deviceList"] = [dongle]
+    } else {
+      payload["devMode"] = true
+    }
     let blob = MsgpackEncoder.encode(payload)
+    AppLog.info("→ curPage visualisation (dongle=\(settings.dongleID ?? "nil"), \(blob.count)B)")
     ble.send(blob, channel: BLEProtocol.Channel.visualisation.rawValue)
+  }
+
+  /// Tell the device to stream settings frames (channel 0x02).
+  func requestSettings() {
+    var payload: [String: Any] = ["msgType": "curPage"]
+    if let dongle = settings.dongleID {
+      payload["deviceList"] = [dongle]
+    } else {
+      payload["devMode"] = true
+    }
+    let blob = MsgpackEncoder.encode(payload)
+    AppLog.info("→ curPage settings (dongle=\(settings.dongleID ?? "nil"), \(blob.count)B)")
+    ble.send(blob, channel: BLEProtocol.Channel.settings.rawValue)
   }
 
   // MARK: Commands to device (channel 0x02)
@@ -310,9 +329,13 @@ final class DriveSessionViewModel: ObservableObject {
   // MARK: Message handling
 
   private func handle(channel: UInt8, data: Data) {
-    guard let channel = BLEProtocol.Channel(rawValue: channel) else { return }
+    guard let channel = BLEProtocol.Channel(rawValue: channel) else {
+      AppLog.warn("unknown channel: \(channel)")
+      return
+    }
     do {
       let dict = try MsgpackDecoder.decodeMap(data)
+      AppLog.debug("rx ch=\(channel.rawValue) keys=\(dict.keys.sorted()) \(data.count)B")
       switch channel {
       case .visualisation:
         let frame = DriveFrameDecoder.decode(dict)

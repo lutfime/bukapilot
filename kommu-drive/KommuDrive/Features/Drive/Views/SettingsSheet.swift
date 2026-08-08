@@ -38,18 +38,13 @@ struct SettingsSheet: View {
       }
       .navigationTitle("Settings")
       .navigationBarTitleDisplayMode(.inline)
-      .toolbar {
-        ToolbarItem(placement: .topBarTrailing) {
-          Button("Done") { dismiss() }
-        }
-      }
       .onAppear {
-        // Switch the device to streaming settings so the sheet populates.
+        // Switch the device to streaming settings so the panel populates.
         viewModel.requestSettings()
         syncToggles()
       }
       .onDisappear {
-        // Switch back to visualisation when the sheet closes.
+        // Switch back to visualisation when leaving the panel.
         viewModel.requestVisualisation()
       }
       .onReceive(viewModel.$settings) { _ in syncToggles() }

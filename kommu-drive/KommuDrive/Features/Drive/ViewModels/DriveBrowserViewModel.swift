@@ -5,7 +5,7 @@ import SwiftUI
 /// Uses DeviceService (SSH) to fetch data from the device.
 @MainActor
 final class DriveBrowserViewModel: ObservableObject {
-  @Published var routes: [String] = []
+  @Published var routes: [DeviceService.Drive] = []
   @Published var selectedRoute: String? = nil
   @Published var driveData: DriveData? = nil
   @Published var isLoading = false
@@ -16,11 +16,13 @@ final class DriveBrowserViewModel: ObservableObject {
 
   func connect(host: String) async {
     isLoading = true; error = nil
-    isConnected = await service.connect(host: host)
-    if isConnected {
+    do {
+      try await service.connect(host: host)
+      isConnected = true
       await loadRoutes()
-    } else {
-      error = "SSH connection failed. Check device IP (\(host))."
+    } catch let err {
+      isConnected = false
+      error = service.connectionError ?? "SSH connection failed: \(err.localizedDescription)"
     }
     isLoading = false
   }
@@ -34,11 +36,26 @@ final class DriveBrowserViewModel: ObservableObject {
   func selectRoute(_ route: String) async {
     selectedRoute = route
     driveData = nil; isLoading = true; error = nil
-    let data = await service.fetchDriveData(route: route)
-    if let data = data, !data.isEmpty {
+    // Reconnect if the SSH session dropped (e.g. idle timeout between list and fetch)
+    if !service.isConnected {
+      guard let host = DeviceService.cachedIP else {
+        error = "SSH disconnected and no cached IP to reconnect."
+        isLoading = false
+        return
+      }
+      do {
+        try await service.connect(host: host)
+      } catch let err {
+        error = service.connectionError ?? "Reconnect failed: \(err.localizedDescription)"
+        isLoading = false
+        return
+      }
+    }
+    let result = await service.fetchDriveData(route: route)
+    if let data = result.data, !data.isEmpty {
       driveData = data
     } else {
-      error = "Failed to load drive data for \(route)."
+      error = result.error ?? "No data found for this drive."
     }
     isLoading = false
   }

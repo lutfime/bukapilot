@@ -1,43 +1,22 @@
 import SwiftUI
 
-/// SSH-based PID tuning: reads the PID lines from interface.py on the device,
-/// shows them with line numbers (editable), and saves changes via sed over SSH.
+/// SSH-based PID tuning panel: reads the X70 PID/longitudinal/steer lines from
+/// interface.py on the device, grouped into sections, and saves changes via
+/// sed over SSH with a py_compile syntax check.
 ///
-/// The user taps the slider button in the top bar → this sheet opens →
-/// SSH connects to the device → fetches the PID lines → displays them.
-/// The user edits a line (e.g., changes a kpV value) → taps Save →
-/// the change is applied via `sed` + py_compile check.
-///
-/// REQUIRES: SwiftSH (SPM package: https://github.com/Frugghi/SwiftSH.git).
-/// Add it in Xcode → File → Add Package Dependencies, then uncomment the
-/// SwiftSHExecutor in SSHExecutor.swift.
+/// Shown inline as a tab panel (no modal sheet). The bottom tab bar handles
+/// navigation, so there's no Done/dismiss button.
 struct TuningSheet: View {
   @ObservedObject var viewModel: DriveSessionViewModel
-  @Environment(\.dismiss) private var dismiss
+  @StateObject private var device = DeviceService()
 
-  // SSH key (embedded — dedicated keypair for the KommuDrive app, installed on the device)
-  private let sshKey = """
------BEGIN OPENSSH PRIVATE KEY-----
-b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
-QyNTUxOQAAACD0DFYRMlbmVNYhW1JP++w3ZDXGb85Hu661umqNOuFFvwAAAJhdMTHOXTEx
-zgAAAAtzc2gtZWQyNTUxOQAAACD0DFYRMlbmVNYhW1JP++w3ZDXGb85Hu661umqNOuFFvw
-AAAEC6Akvf4aucDWURnFE3hwC+Scggr5UjIup1HsH8eqQokfQMVhEyVuZU1iFbUk/77Ddk
-NcZvzke7rrW6ao064UW/AAAADmtvbW11ZHJpdmUtYXBwAQIDBAUGBw==
------END OPENSSH PRIVATE KEY-----
-"""
   @State private var sshConnected = false
   @State private var sshStatus: String = ""
+  @State private var connecting = false
 
-  // Tuning lines: [lineNum: code]
-  @State private var lines: [(lineNum: Int, code: String)] = []
+  @State private var sections: [DeviceService.TuningSection] = []
   @State private var editedLines: [Int: String] = [:]  // lineNum -> edited code
   @State private var saveResult: String = ""
-
-  // The interface.py path on the device (both lower + merged)
-  private let interfacePath = "/data/safe_staging/merged/opendbc_repo/opendbc/car/proton/interface.py"
-  private let lowerPath = "/data/openpilot/opendbc_repo/opendbc/car/proton/interface.py"
-  // PID line patterns to extract
-  private let grepPattern = "pid.kpV\\|pid.kiV\\|pid.kf\\|longitudinalTuning.kpV\\|longitudinalTuning.kiV\\|LAT_SMOOTH_SECONDS ="
 
   var body: some View {
     NavigationStack {
@@ -45,23 +24,22 @@ NcZvzke7rrW6ao064UW/AAAADmtvbW11ZHJpdmUtYXBwAQIDBAUGBw==
         if !sshConnected {
           sshSetupSection
         } else {
-          tuningLinesSection
-          saveSection
+          ForEach(sections) { section in
+            tuningSection(section)
+          }
+          if !sections.isEmpty {
+            saveSection
+          }
         }
       }
       .navigationTitle("PID Tuning")
       .navigationBarTitleDisplayMode(.inline)
-      .toolbar {
-        ToolbarItem(placement: .topBarTrailing) {
-          Button("Done") { disconnect(); dismiss() }
-        }
-      }
-      .onAppear { checkKeyAndConnect() }
-      .onDisappear { disconnect() }
     }
+    .onAppear { connect() }
+    .onDisappear { device.disconnect(); sshConnected = false }
   }
 
-  // MARK: SSH setup (first time: paste key, then connect)
+  // MARK: SSH setup (connecting / error / retry)
 
   private var sshSetupSection: some View {
     Section {
@@ -75,6 +53,8 @@ NcZvzke7rrW6ao064UW/AAAADmtvbW11ZHJpdmUtYXBwAQIDBAUGBw==
             .font(.system(size: 13))
             .foregroundStyle(.secondary)
             .multilineTextAlignment(.center)
+          Button("Retry") { connect() }
+            .buttonStyle(.bordered)
         }
       }
       .frame(maxWidth: .infinity)
@@ -84,42 +64,40 @@ NcZvzke7rrW6ao064UW/AAAADmtvbW11ZHJpdmUtYXBwAQIDBAUGBw==
     }
   }
 
-  // MARK: Tuning lines (the editable code)
+  // MARK: A tuning section (Lateral / Longitudinal / Steer)
 
-  private var tuningLinesSection: some View {
+  private func tuningSection(_ section: DeviceService.TuningSection) -> some View {
     Section {
-      if lines.isEmpty {
-        ProgressView("Loading PID lines...")
-      } else {
-        ForEach(lines.indices, id: \.self) { i in
-          let line = lines[i]
-          VStack(alignment: .leading, spacing: 2) {
-            Text("Line \(line.lineNum)")
-              .font(.system(size: 10, design: .monospaced))
+      ForEach(section.lines) { line in
+        VStack(alignment: .leading, spacing: 3) {
+          HStack {
+            Text(line.label)
+              .font(.system(size: 11, weight: .medium))
+            Spacer()
+            Text("L\(line.lineNum)")
+              .font(.system(size: 9, design: .monospaced))
               .foregroundStyle(.tertiary)
-            TextField("code", text: Binding(
-              get: { editedLines[line.lineNum] ?? line.code },
-              set: { editedLines[line.lineNum] = $0 }
-            ), axis: .horizontal)
-            .font(.system(size: 11, design: .monospaced))
-            .textFieldStyle(.roundedBorder)
-            .autocorrectionDisabled()
           }
-          .padding(.vertical, 2)
+          TextField("value", text: Binding(
+            get: { editedLines[line.lineNum] ?? line.value },
+            set: { editedLines[line.lineNum] = $0 }
+          ), axis: .horizontal)
+          .font(.system(size: 11, design: .monospaced))
+          .textFieldStyle(.roundedBorder)
+          .autocorrectionDisabled()
         }
+        .padding(.vertical, 2)
       }
     } header: {
-      Text("PID Values (interface.py)")
-    } footer: {
-      Text("Edit the values in the text fields, then tap Save. Changes apply on the next drive. Speed breakpoints: kpBP = [0, 5, 15, 25, 35] m/s.")
+      Text(section.name)
     }
   }
 
   private var saveSection: some View {
     Section {
-      let changed = editedLines.filter { lineNum, newCode in
-        let original = lines.first(where: { $0.lineNum == lineNum })?.code
-        return newCode != original && !newCode.isEmpty
+      let changed = editedLines.filter { lineNum, newValue in
+        let original = sections.flatMap(\.lines).first(where: { $0.lineNum == lineNum })?.value
+        return newValue != original && !newValue.isEmpty
       }
       Button {
         saveChanges(changed: changed)
@@ -134,216 +112,100 @@ NcZvzke7rrW6ao064UW/AAAADmtvbW11ZHJpdmUtYXBwAQIDBAUGBw==
       .disabled(changed.isEmpty)
 
       if !saveResult.isEmpty {
-        Text(saveResult)
-          .font(.system(size: 12))
-          .foregroundStyle(saveResult.contains("OK") ? .green : .red)
+        VStack(alignment: .leading, spacing: 6) {
+          Text(saveResult)
+            .font(.system(size: 11, design: .monospaced))
+            .foregroundStyle(saveResult.hasPrefix("✓") ? .green : .red)
+            .textSelection(.enabled)
+          if saveResult.contains("✗") {
+            Button("Copy error") {
+              UIPasteboard.general.string = saveResult
+            }
+            .buttonStyle(.bordered)
+            .tint(.secondary)
+          }
+        }
       }
     } header: {
       Text("Apply")
+    } footer: {
+      Text("Changes apply on the next drive. Each save is syntax-checked (py_compile) before committing.")
     }
   }
 
   // MARK: SSH operations
 
-  private func checkKeyAndConnect() {
-    connect()
-  }
-
+  /// Connects to the device. Uses the cached IP (from last successful connect)
+  /// for instant reconnect — no need to wait for BLE. Falls back to the live
+  /// BLE settings IP if no cache exists.
   private func connect() {
+    guard !connecting else { return }
+    connecting = true
     sshStatus = ""
-    let host = viewModel.settings.localIP ?? ""
-    if host.isEmpty {
-      sshStatus = "No device IP. Connect to device first."
-      return
-    }
+    sshConnected = false
 
-    // Use the SSH executor to connect + fetch lines.
-    // The executor uses SwiftSH (or a stub if the library isn't added yet).
-    DispatchQueue.global(qos: .userInitiated).async {
-      let executor = TuningSheet.makeExecutor()
-      let connected = executor.connect(host: host, user: "kommu", privateKey: sshKey)
-
-      DispatchQueue.main.async {
-        if connected {
-          self.sshConnected = true
-          self.sshStatus = "Connected"
-          self.executor = executor
-          self.fetchLines()
-        } else {
-          self.sshStatus = "SSH connection failed. Check the key + device IP (\(host))."
+    Task {
+      // Prefer cached IP (instant), fall back to live BLE IP.
+      let host = DeviceService.cachedIP ?? viewModel.settings.localIP
+      await MainActor.run { connecting = false }
+      guard let host = host, !host.isEmpty else {
+        sshStatus = "No device IP yet. Connect to the device via BLE once, then it's cached for SSH."
+        return
+      }
+      do {
+        try await device.connect(host: host)
+        await MainActor.run { sshConnected = true }
+        await fetchLines()
+      } catch {
+        await MainActor.run {
+          sshStatus = device.connectionError ?? "SSH connection failed: \(error.localizedDescription)"
         }
       }
     }
   }
 
   private func fetchLines() {
-    guard let executor = executor else { return }
-    DispatchQueue.global(qos: .userInitiated).async {
-      // grep the PID lines with line numbers
-      let cmd = "grep -n '\(grepPattern)' \(interfacePath)"
-      let output = executor.execute(cmd)
-
-      DispatchQueue.main.async {
-        if let output = output, !output.isEmpty {
-          self.lines = output.split(separator: "\n").compactMap { line in
-            // Parse "123:ret.lateralTuning.pid.kpV  = [...]"
-            let parts = line.split(separator: ":", maxSplits: 1)
-            guard parts.count == 2, let lineNum = Int(parts[0]) else { return nil }
-            let code = String(parts[1]).trimmingCharacters(in: .whitespaces)
-            return (lineNum: lineNum, code: code)
-          }
-          if self.lines.isEmpty {
-            self.sshStatus = "No PID lines found. Check interface.py."
-          }
-        } else {
-          self.sshStatus = "Failed to read PID lines."
+    Task {
+      let fetched = await device.fetchTuningLines()
+      await MainActor.run {
+        self.sections = fetched
+        if fetched.isEmpty {
+          self.sshStatus = "No X70 tuning lines found. Is this an X70?"
+          self.sshConnected = false
         }
       }
     }
   }
 
   private func saveChanges(changed: [Int: String]) {
-    guard let executor = executor else { return }
     saveResult = "Saving..."
-
-    DispatchQueue.global(qos: .userInitiated).async {
+    Task {
       var results: [String] = []
-      for (lineNum, newCode) in changed {
-        // sed to replace the line, then py_compile to check syntax.
-        // Do both merged + lower paths.
-        let escapedCode = newCode.replacingOccurrences(of: "'", with: "'\\''")
-        let sedCmd = """
-        sed -i '\(lineNum)c\\\(escapedCode)' \(self.interfacePath) \
-        && sed -i '\(lineNum)c\\\(escapedCode)' \(self.lowerPath) \
-        && /usr/local/venv/bin/python -m py_compile \(self.interfacePath) 2>&1 \
-        && echo OK || echo SYNTAX_ERROR
-        """
-        let result = executor.execute(sedCmd) ?? "NO_RESPONSE"
-        results.append("Line \(lineNum): \(result.contains("OK") ? "✓" : "✗ \(result)")")
-
-        // If syntax error, stop — don't apply more changes.
-        if result.contains("SYNTAX_ERROR") || result.contains("Error") {
+      var hadError = false
+      // Build a map of lineNum → rawLine for the save call
+      let allLines = sections.flatMap(\.lines)
+      for (lineNum, newValue) in changed.sorted(by: { $0.key < $1.key }) {
+        guard let line = allLines.first(where: { $0.lineNum == lineNum }) else { continue }
+        let res = await device.saveTuningLine(lineNum: lineNum, rawLine: line.rawLine, newValue: newValue, file: line.file)
+        if res.ok {
+          results.append("✓ Line \(lineNum): \(res.detail)")
+        } else {
+          results.append("✗ Line \(lineNum): \(res.detail)")
+          hadError = true
           break
         }
       }
-
-      DispatchQueue.main.async {
-        self.saveResult = results.joined(separator: "\n")
-        // Refresh the displayed lines
-        self.fetchLines()
-        self.editedLines.removeAll()
+      await MainActor.run {
+        self.saveResult = results.isEmpty ? "No changes" : results.joined(separator: "\n")
+      }
+      if hadError {
+        // Revert the failed edit in the UI — clear editedLines so text fields
+        // fall back to the original device values.
+        await MainActor.run { self.editedLines.removeAll() }
+      } else {
+        await fetchLines()
+        await MainActor.run { self.editedLines.removeAll() }
       }
     }
   }
-
-  private func disconnect() {
-    executor?.disconnect()
-    executor = nil
-    sshConnected = false
-  }
-
-  // Holds the SSH executor instance (set after connect)
-  @State private var executor: AnySSHExecutorBox?
-
-  /// Creates the SSH executor. Replace StubSSHExecutor with SwiftSHExecutor
-  /// after adding the SwiftSH package.
-  static func makeExecutor() -> AnySSHExecutorBox {
-    // TODO: Uncomment after adding SwiftSH via SPM:
-    // return AnySSHExecutorBox(SwiftSHExecutor())
-    return AnySSHExecutorBox(StubSSHExecutor())
-  }
 }
-
-// MARK: - SSH Executor Protocol
-
-/// Protocol for executing shell commands on the device via SSH.
-protocol SSHExecutor: AnyObject {
-  func connect(host: String, user: String, privateKey: String) -> Bool
-  func execute(_ command: String) -> String?
-  func disconnect()
-}
-
-/// Type-erased wrapper (so @State can hold it).
-final class AnySSHExecutorBox: SSHExecutor {
-  private let _connect: (String, String, String) -> Bool
-  private let _execute: (String) -> String?
-  private let _disconnect: () -> Void
-
-  init<E: SSHExecutor>(_ executor: E) {
-    _connect = executor.connect
-    _execute = executor.execute
-    _disconnect = executor.disconnect
-  }
-  func connect(host: String, user: String, privateKey: String) -> Bool { _connect(host, user, privateKey) }
-  func execute(_ command: String) -> String? { _execute(command) }
-  func disconnect() { _disconnect() }
-}
-
-/// Stub — returns failure until SwiftSH is added.
-/// After adding SwiftSH (https://github.com/Frugghi/SwiftSH.git via SPM),
-/// replace this with SwiftSHExecutor (below) in `makeExecutor()`.
-final class StubSSHExecutor: SSHExecutor {
-  func connect(host: String, user: String, privateKey: String) -> Bool {
-    return false  // SwiftSH not added yet
-  }
-  func execute(_ command: String) -> String? { return nil }
-  func disconnect() {}
-}
-
-// MARK: - Citadel Implementation
-//
-// Requires: Citadel SPM package.
-// Xcode → File → Add Package Dependencies → https://github.com/orlandos-nl/Citadel.git
-// Then uncomment this block + change makeExecutor() to return CitadelSSHExecutor.
-//
-// import Citadel
-// import NIOSSH
-//
-// final class CitadelSSHExecutor: SSHExecutor {
-//   private var client: SSHClient?
-//
-//   func connect(host: String, user: String, privateKey: String) -> Bool {
-//     // Citadel uses async/await — bridge to sync via semaphore (called from background thread)
-//     let semaphore = DispatchSemaphore(value: 0)
-//     var connected = false
-//     Task {
-//       do {
-//         let parsedKey = try NIOSSHPrivateKey(file: privateKey)
-//         let settings = SSHClientSettings(
-//           host: host,
-//           port: 22,
-//           authenticationMethod: .privateKey(parsedKey),
-//           hostKeyValidator: .acceptAnything()
-//         )
-//         self.client = try await SSHClient.connect(to: settings)
-//         connected = true
-//       } catch {
-//         AppLog.error("Citadel connect failed: \(error)")
-//       }
-//       semaphore.signal()
-//     }
-//     semaphore.wait()
-//     return connected
-//   }
-//
-//   func execute(_ command: String) -> String? {
-//     guard let client = client else { return nil }
-//     let semaphore = DispatchSemaphore(value: 0)
-//     var output: String?
-//     Task {
-//       do {
-//         let buf = try await client.executeCommand(command)
-//         output = String(buffer: buf)
-//       } catch {
-//         AppLog.error("Citadel execute failed: \(error)")
-//       }
-//       semaphore.signal()
-//     }
-//     semaphore.wait()
-//     return output
-//   }
-//
-//   func disconnect() {
-//     client = nil
-//   }
-// }

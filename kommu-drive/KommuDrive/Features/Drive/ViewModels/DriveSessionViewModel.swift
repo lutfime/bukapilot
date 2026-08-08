@@ -353,6 +353,11 @@ final class DriveSessionViewModel: ObservableObject {
         updateFPS()
       case .settings:
         settings = DeviceSettings.decode(dict)
+        // Cache the device IP for instant SSH reconnect on next app launch
+        // (no need to wait for BLE — SSH is independent of the BLE connection).
+        if let ip = settings.localIP, !ip.isEmpty {
+          DeviceService.cachedIP = ip
+        }
         // Once settings arrive we know the DongleId; ask for the visualisation
         // stream so the device starts pushing frames to us. Only request if we
         // haven't received any visualisation frames yet (avoid flooding).

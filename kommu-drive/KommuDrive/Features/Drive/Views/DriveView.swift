@@ -1,28 +1,44 @@
 import SwiftUI
 
-/// Main driving screen: SceneKit road view (bottom layer) + SwiftUI HUD overlay.
-///
-/// The two layers are independent — SceneKit owns its 3D world coordinate space,
-/// SwiftUI owns its screen-space HUD. They compose in a ZStack but don't
-/// reference each other's positions, so there's no layout drift.
+/// Main driving screen: SceneKit road view + HUD overlay.
+/// The tab bar lives in RootView (always visible, even before BLE connects).
 struct DriveView: View {
   @ObservedObject var viewModel: DriveSessionViewModel
-  @State private var showSettings = false
-  @State private var showTuning = false
-  @State private var showBrowser = false
+
+  /// Tab identifiers — shared with RootView which owns the tab bar.
+  enum Tab: String, CaseIterable { case drive, tuning, drives, settings }
 
   // The renderer is created once and shared between this view and the SceneView.
   @State private var renderer = DriveSceneRenderer()
 
   var body: some View {
+    ZStack {
+      // SceneKit road view
+      DriveSceneView(viewModel: viewModel, renderer: renderer)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .ignoresSafeArea()
+
+      // HUD overlay
+      driveHUD
+    }
+    .onChange(of: viewModel.connectionState) { _, state in
+      if state.isConnected {
+        viewModel.requestSettings()
+      }
+    }
+    .onAppear {
+      if viewModel.connectionState.isConnected {
+        viewModel.requestSettings()
+      }
+    }
+  }
+
+  // MARK: Drive HUD (speed, engagement, confidence ball)
+
+  private var driveHUD: some View {
     GeometryReader { geo in
       ZStack {
-        // Layer 1: SceneKit road view (fills the whole screen)
-        DriveSceneView(viewModel: viewModel, renderer: renderer)
-          .frame(maxWidth: .infinity, maxHeight: .infinity)
-          .ignoresSafeArea()
-
-        // Layer 2: SwiftUI HUD overlay
+        // Top bar: speed + engagement + target speed
         VStack(spacing: 0) {
           topBar
           Spacer()
@@ -47,25 +63,39 @@ struct DriveView: View {
         }
       }
     }
-    .onChange(of: viewModel.connectionState) { _, state in
-      if state.isConnected {
-        viewModel.requestSettings()
+  }
+
+  // MARK: Bottom tab bar (static — used by RootView)
+
+  static func tabBar(selectedTab: Binding<Tab>) -> some View {
+    HStack(spacing: 0) {
+      tabItem(icon: "car.fill", label: "Drive", tab: .drive, selectedTab: selectedTab)
+      tabItem(icon: "slider.horizontal.3", label: "Tuning", tab: .tuning, selectedTab: selectedTab)
+      tabItem(icon: "chart.line.uptrend.xyaxis", label: "Drives", tab: .drives, selectedTab: selectedTab)
+      tabItem(icon: "gearshape.fill", label: "Settings", tab: .settings, selectedTab: selectedTab)
+    }
+    .padding(.top, 6)
+    .padding(.bottom, 2)
+    .background(Color(.systemBackground).opacity(0.95))
+  }
+
+  private static func tabItem(icon: String, label: String, tab: Tab, selectedTab: Binding<Tab>) -> some View {
+    Button {
+      withAnimation(.easeInOut(duration: 0.2)) {
+        selectedTab.wrappedValue = tab
       }
-    }
-    .onAppear {
-      if viewModel.connectionState.isConnected {
-        viewModel.requestSettings()
+    } label: {
+      VStack(spacing: 2) {
+        Image(systemName: icon)
+          .font(.system(size: 18, weight: .semibold))
+        Text(label)
+          .font(.system(size: 10, weight: .medium))
       }
+      .foregroundStyle(selectedTab.wrappedValue == tab ? Color.accentColor : .secondary)
+      .frame(maxWidth: .infinity)
+      .padding(.vertical, 6)
     }
-    .sheet(isPresented: $showSettings) {
-      SettingsSheet(viewModel: viewModel)
-    }
-    .sheet(isPresented: $showTuning) {
-      TuningSheet(viewModel: viewModel)
-    }
-    .sheet(isPresented: $showBrowser) {
-      DriveBrowserSheet(viewModel: viewModel)
-    }
+    .buttonStyle(.plain)
   }
 
   // MARK: HUD — Top bar
@@ -95,38 +125,9 @@ struct DriveView: View {
 
       Spacer()
 
-      // Right: target speed + gear button
+      // Right: target speed (the tab bar at the bottom handles navigation)
       VStack(alignment: .trailing, spacing: 4) {
-        HStack(alignment: .top, spacing: 8) {
-          speedBadge(value: target, unit: speedUnit, label: "MODEL", accent: true)
-          Button {
-            showSettings = true
-          } label: {
-            Image(systemName: "gearshape.fill")
-              .font(.system(size: 16))
-              .foregroundStyle(.secondary)
-              .frame(width: 32, height: 32)
-              .background(Color.white.opacity(0.08), in: Circle())
-          }
-          Button {
-            showTuning = true
-          } label: {
-            Image(systemName: "slider.horizontal.3")
-              .font(.system(size: 16))
-              .foregroundStyle(.secondary)
-              .frame(width: 32, height: 32)
-              .background(Color.white.opacity(0.08), in: Circle())
-          }
-          Button {
-            showBrowser = true
-          } label: {
-            Image(systemName: "chart.line.uptrend.xyaxis")
-              .font(.system(size: 16))
-              .foregroundStyle(.secondary)
-              .frame(width: 32, height: 32)
-              .background(Color.white.opacity(0.08), in: Circle())
-          }
-        }
+        speedBadge(value: target, unit: speedUnit, label: "MODEL", accent: true)
         // FPS counter
         Text(String(format: "%.1f fps · %d", viewModel.fps, viewModel.framesReceived))
           .font(.system(size: 10, design: .monospaced))

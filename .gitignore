@@ -66,6 +66,9 @@ comma*.sh
 
 selfdrive/modeld/models/*.pkl
 
+# Dev/build model artifacts: ONNX graph experiments, RKNN build-config sweeps
+selfdrive/modeld/models_dev/
+
 # openpilot log files
 *.bz2
 *.zst

@@ -189,7 +189,16 @@ def main():
     sys.exit(1)
 
   # --- build ---
-  # do_quantization=False: we want FP16 weights (set above), not INT8 calibration.
+  # NOTE (2026-08-07): do_quantization=False makes the quantized_dtype setting above INERT.
+  # Per Rockchip docs: "do_quantization=False will not perform quantization operations,
+  # but will convert the weights from float32 to float16." So this produces an FP16 model,
+  # NOT an INT16-quantized model. The empty quant_tab in the output confirms this.
+  #
+  # On-device benchmark showed FP16 = 138ms inference (7.3 Hz) — too slow for 20Hz.
+  # Switching to do_quantization=True with w16a16i would give true INT16 quantization BUT
+  # no speedup (FP16 and INT16 share the same 16-bit NPU datapath on RK3588, ~3 TOPS).
+  # Only INT8 (w8a8) is ~2x faster (~6 TOPS) but was rejected for driving quality.
+  # See MODEL-CONVERSION-GUIDE.md §4 for the full analysis.
   ret = rknn.build(do_quantization=False)
   if ret != 0:
     print(f"[FAIL] build returned {ret}.", file=sys.stderr)

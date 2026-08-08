@@ -8,6 +8,8 @@ import SwiftUI
 struct DriveView: View {
   @ObservedObject var viewModel: DriveSessionViewModel
   @State private var showSettings = false
+  @State private var showTuning = false
+  @State private var showBrowser = false
 
   // The renderer is created once and shared between this view and the SceneView.
   @State private var renderer = DriveSceneRenderer()
@@ -58,6 +60,12 @@ struct DriveView: View {
     .sheet(isPresented: $showSettings) {
       SettingsSheet(viewModel: viewModel)
     }
+    .sheet(isPresented: $showTuning) {
+      TuningSheet(viewModel: viewModel)
+    }
+    .sheet(isPresented: $showBrowser) {
+      DriveBrowserSheet(viewModel: viewModel)
+    }
   }
 
   // MARK: HUD — Top bar
@@ -95,6 +103,24 @@ struct DriveView: View {
             showSettings = true
           } label: {
             Image(systemName: "gearshape.fill")
+              .font(.system(size: 16))
+              .foregroundStyle(.secondary)
+              .frame(width: 32, height: 32)
+              .background(Color.white.opacity(0.08), in: Circle())
+          }
+          Button {
+            showTuning = true
+          } label: {
+            Image(systemName: "slider.horizontal.3")
+              .font(.system(size: 16))
+              .foregroundStyle(.secondary)
+              .frame(width: 32, height: 32)
+              .background(Color.white.opacity(0.08), in: Circle())
+          }
+          Button {
+            showBrowser = true
+          } label: {
+            Image(systemName: "chart.line.uptrend.xyaxis")
               .font(.system(size: 16))
               .foregroundStyle(.secondary)
               .frame(width: 32, height: 32)

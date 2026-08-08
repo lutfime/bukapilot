@@ -6,10 +6,6 @@
 	objectVersion = 71;
 	objects = {
 
-/* Begin PBXBuildFile section */
-		C12A127930270B37004E4A7D /* Citadel in Frameworks */ = {isa = PBXBuildFile; productRef = 4D2A1B00_C1D1_0000_0000_000000000001 /* Citadel */; };
-/* End PBXBuildFile section */
-
 /* Begin PBXFileReference section */
 		4D2A1B00_0000_0000_0000_0000000000B0 /* KommuDrive.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = KommuDrive.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -33,7 +29,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				C12A127930270B37004E4A7D /* Citadel in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -76,7 +71,6 @@
 			);
 			name = KommuDrive;
 			packageProductDependencies = (
-				4D2A1B00_C1D1_0000_0000_000000000001 /* Citadel */,
 			);
 			productName = KommuDrive;
 			productReference = 4D2A1B00_0000_0000_0000_0000000000B0 /* KommuDrive.app */;
@@ -102,7 +96,7 @@
 			);
 			mainGroup = 4D2A1B00_0000_0000_0000_0000000000F0;
 			packageReferences = (
-				C12A1278302704E9004E4A7D /* XCRemoteSwiftPackageReference "Citadel" */,
+				C12A1278302704E9004E4A7D /* XCRemoteSwiftPackageReference "SwiftSH" */,
 			);
 			productRefGroup = 4D2A1B00_0000_0000_0000_0000000000A1 /* Products */;
 			projectDirPath = "";
@@ -285,23 +279,15 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
-		C12A1278302704E9004E4A7D /* XCRemoteSwiftPackageReference "Citadel" */ = {
+		C12A1278302704E9004E4A7D /* XCRemoteSwiftPackageReference "SwiftSH" */ = {
 			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/orlandos-nl/Citadel.git";
+			repositoryURL = "https://github.com/Frugghi/SwiftSH.git";
 			requirement = {
 				kind = upToNextMajorVersion;
-				minimumVersion = 0.12.0;
+				minimumVersion = 0.1.2;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
-
-/* Begin XCSwiftPackageProductDependency section */
-		4D2A1B00_C1D1_0000_0000_000000000001 /* Citadel */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = C12A1278302704E9004E4A7D /* XCRemoteSwiftPackageReference "Citadel" */;
-			productName = Citadel;
-		};
-/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 4D2A1B00_0000_0000_0000_0000000000E0 /* Project object */;
 }

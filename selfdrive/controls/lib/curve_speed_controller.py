@@ -132,14 +132,36 @@ class CurveSpeedController:
       return STANDARD
 
   def _load_curvature_data(self):
-    """Load learned curvature→latacc map from Params (Auto profile)."""
+    """Load + sanitize learned curvature→latacc map from Params (Auto profile).
+    Ported from FrogPilot's normalize_curvature_data: validates keys, clamps counts,
+    skips malformed entries so a corrupted param can't crash _update_lateral_acceleration."""
     raw = self.params.get("CurvatureData")
     if raw is None or raw == "":
       return {}
     try:
-      return json.loads(raw) if isinstance(raw, str) else raw
+      data = json.loads(raw) if isinstance(raw, str) else raw
     except Exception:
       return {}
+    if not isinstance(data, dict):
+      return {}
+    normalized = {}
+    for key, val in data.items():
+      try:
+        nk = str(abs(round(float(key), ROUNDING_PRECISION)))
+        count = min(int(val["count"]), CALIBRATION_PROGRESS_THRESHOLD)
+        if count <= 0:
+          continue
+        average = float(val["average"])
+        if nk in normalized:
+          merged = normalized[nk]
+          total = merged["count"] + count
+          normalized[nk] = {"average": (merged["average"] * merged["count"] + average * count) / total,
+                            "count": min(total, CALIBRATION_PROGRESS_THRESHOLD)}
+        else:
+          normalized[nk] = {"average": average, "count": count}
+      except (KeyError, TypeError, ValueError):
+        continue  # skip malformed entry
+    return normalized
 
   # ---- Learning (Auto profile) — ported from FrogPilot log_data / update_lateral_acceleration ----
 
@@ -226,6 +248,9 @@ class CurveSpeedController:
     else:
       self.saturation_backoff_samples = 0
     self.max_limit = float(np.clip(self.max_limit, max_lat * MIN_LIMIT_FACTOR, MAX_LATERAL_ACCEL_NO_ROLL))
+    # Persist every cycle (cheap nonblocking write) so Sport's grown limit survives restarts
+    # even if the driver stops before the learning save-branch fires.
+    self.params.put_nonblocking("MapCornerMaxLimit", self.max_limit)
 
   # ---- Budget selection (update_budget) — adapted from FrogPilot ----
 

@@ -61,6 +61,8 @@
 - Per-seg f/OUT/i/OUT: 29.6/67 · 20.7/78 · 17.5/53 · 11.1/58 · 28.4/59 · 23.6/73 · 20.3/75 · 20.7/76.
 
 **kp verdict (the "should we restore the cut?" question):** the cut (commit `a11fb76`: kpV 0.06→0.045 @54km/h, 0.14→0.10 @90km/h) was to damp overshoot from kp × laggy integrator. With i/OUT still ~70% (not negligible), the cut is STILL doing useful damping → **leave kp as-is; do NOT fully restore.** f/OUT is in-target and the car feels good, so there's no complaint to fix by raising kp. If tighter mid-corner tracking is wanted specifically: half-restore (0.052/0.12), one drive, watch overshoot. Full 0.06/0.14 not justified while i/OUT ~70%.
+
+**User partial bump (2026-08-09):** set kpV 54km/h `0.045→0.05` only (≈⅓ of the cut restored; 90/126 km/h unchanged). Tested on city drive `2026-08-09--10-30-57` (17 rlog segs): **drive was the wrong regime** — 86% of time <36 km/h, only **0.3% above 54 km/h** → the bumped breakpoint was active ~3 s, can't validate the change. NO regression seen: steady-state step p95 0.0263 @10-15 m/s (≈ baseline 0.0265), f/OUT 20.3% on the one ~42 km/h segment (seg12). Engage-snap spikes (max step ~0.9 @5-10 m/s, desiredAngle 394° @0-5 m/s) are engage/disengage artifacts, not steady wobble. **Need a drive sustaining 54–90 km/h to actually judge the kp bump.**
 - Line 43 (`0.000071`) is the shared default for X50/S70 — leave it.
 
 **Levers ranked:** (1) raise kf — DONE; (2) D-term — PID supports `k_d`/`error_rate` but `latcontrol_pid` doesn't pass them (wired but unused; code change to enable); (3) LAT_SMOOTH — weaker than thought (desired-angle already quiet, p95 step 0.2-0.3°). Do NOT reduce kp (→ understeer).

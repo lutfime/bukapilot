@@ -43,6 +43,12 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"DongleId", {PERSISTENT, STRING}},
     {"DrivePathOffset", {PERSISTENT, STRING, "0.0"}},
     {"BrakeMagGain", {PERSISTENT, STRING, "0"}},
+    // ---- Map corner slowdown (Kommu, Proton X70) ----
+    {"MapCornerEnabled", {PERSISTENT, BOOL, "0"}},
+    {"MapCornerBudget", {PERSISTENT, FLOAT, "2.5"}},
+    {"MapCornerLookahead", {PERSISTENT, FLOAT, "200"}},
+    {"vCruiseMapCorner", {CLEAR_ON_MANAGER_START, FLOAT, "0"}},
+    {"MapCornerValid", {CLEAR_ON_MANAGER_START, BOOL, "0"}},
     {"DoReboot", {CLEAR_ON_MANAGER_START, BOOL}},
     {"DoShutdown", {CLEAR_ON_MANAGER_START, BOOL}},
     {"DoUninstall", {CLEAR_ON_MANAGER_START, BOOL}},

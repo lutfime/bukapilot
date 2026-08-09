@@ -98,6 +98,9 @@ procs = [
   PythonProcess("deleter", "system.loggerd.deleter", always_run),
   PythonProcess("dmonitoringd", "selfdrive.monitoring.dmonitoringd", driverview, enabled=(WEBCAM or not PC)),
   PythonProcess("qcomgpsd", "system.qcomgpsd.qcomgpsd", qcomgps, enabled=(TICI or KA2)),
+  # Map-aware corner slowdown (Kommu). Reads gpsLocation, queries OSM Overpass,
+  # writes vCruiseMapCorner/MapCornerValid for the longitudinal planner. KA2-only.
+  PythonProcess("mapd_kommu", "selfdrive.mapd_kommu.mapd", only_onroad, enabled=KA2),
   PythonProcess("pandad", "selfdrive.pandad.pandad", always_run),
   PythonProcess("paramsd", "selfdrive.locationd.paramsd", only_onroad),
   PythonProcess("lagd", "selfdrive.locationd.lagd", only_onroad),

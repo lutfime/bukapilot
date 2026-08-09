@@ -19,6 +19,7 @@ struct TuningSheet: View {
           if !vm.sections.isEmpty {
             saveSection
           }
+          mapCornerSection
         }
       }
       .navigationTitle("PID Tuning")
@@ -166,6 +167,87 @@ struct TuningSheet: View {
       Text("Apply")
     } footer: {
       Text("Changes apply on the next drive. Each save is syntax-checked before committing.")
+    }
+  }
+
+  // MARK: Map corner slowdown
+
+  private var mapCornerSection: some View {
+    Section {
+      Toggle("Enable map corner slowdown", isOn: $vm.mapDraftEnabled)
+
+      VStack(alignment: .leading, spacing: 4) {
+        HStack {
+          Text("Corner aggressiveness")
+          Spacer()
+          Text(String(format: "%.1f m/s²", vm.mapDraftBudget))
+            .font(.system(size: 11, design: .monospaced))
+            .foregroundStyle(.secondary)
+        }
+        Slider(value: $vm.mapDraftBudget, in: 1.0...4.0, step: 0.1)
+        Text(lowerBudgetLabel(vm.mapDraftBudget))
+          .font(.system(size: 10))
+          .foregroundStyle(.tertiary)
+      }
+
+      VStack(alignment: .leading, spacing: 4) {
+        HStack {
+          Text("Lookahead")
+          Spacer()
+          Text(String(format: "%.0f m", vm.mapDraftLookahead))
+            .font(.system(size: 11, design: .monospaced))
+            .foregroundStyle(.secondary)
+        }
+        Slider(value: $vm.mapDraftLookahead, in: 100...400, step: 10)
+      }
+
+      if vm.mapHasChanges {
+        Button {
+          vm.saveMapParams()
+        } label: {
+          HStack {
+            Image(systemName: "checkmark.circle.fill")
+            Text("Save map corner settings")
+          }
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(.blue)
+      }
+
+      if !vm.mapSaveResult.isEmpty {
+        Text(vm.mapSaveResult)
+          .font(.system(size: 11, design: .monospaced))
+          .foregroundStyle(vm.mapSaveResult.contains("✓") ? .green : .red)
+          .textSelection(.enabled)
+      }
+
+      // Live status (read-only, reflects what mapd_kommu last published)
+      if let p = vm.mapParams {
+        HStack {
+          Circle()
+            .fill(p.valid ? Color.green : Color.gray.opacity(0.3))
+            .frame(width: 8, height: 8)
+          Text(p.valid
+               ? "Active — advisory \(String(format: "%.0f km/h", p.vCorner * 3.6))"
+               : "Inactive (no GPS fix or route)")
+            .font(.system(size: 11))
+            .foregroundStyle(.secondary)
+        }
+      }
+    } header: {
+      Text("Map Corner Slowdown")
+    } footer: {
+      Text("Uses OpenStreetMap road geometry to slow the car for upcoming corners. Slowdown-only — can never accelerate. Requires device GPS + internet.")
+    }
+  }
+
+  private func lowerBudgetLabel(_ b: Double) -> String {
+    switch b {
+    case ..<1.6: return "very cautious — firm braking for any curve"
+    case ..<2.1: return "conservative — slows for most corners"
+    case ..<2.8: return "balanced (recommended)"
+    case ..<3.5: return "spirited — mild scrub on tight corners"
+    default: return "aggressive — rarely triggers"
     }
   }
 }

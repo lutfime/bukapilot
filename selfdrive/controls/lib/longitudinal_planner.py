@@ -141,6 +141,22 @@ class LongitudinalPlanner:
     v_cruise = v_cruise_kph * CV.KPH_TO_MS
     v_cruise_initialized = sm['carState'].vCruise != V_CRUISE_UNSET
 
+    # ===== MAP CORNER SLOWDOWN (Kommu, slowdown-only) =====
+    # mapd_kommu publishes an advisory corner speed (vCruiseMapCorner) derived from OSM
+    # road curvature. Clamp v_cruise down to it before the MPC sees it, so the MPC plans a
+    # smooth decel to the lower target. min() guarantees this can ONLY slow the car down,
+    # never accelerate. No-op when MapCornerEnabled/MapCornerValid are false.
+    if (self.CP.openpilotLongitudinalControl
+            and self.params.get_bool("MapCornerEnabled", False)
+            and self.params.get_bool("MapCornerValid", False)):
+      try:
+        _v_map = float(self.params.get("vCruiseMapCorner"))
+        if _v_map > 1.0:
+          v_cruise = min(v_cruise, _v_map)
+      except (TypeError, ValueError):
+        pass
+    # ===== END MAP CORNER SLOWDOWN =====
+
     long_control_off = sm['controlsState'].longControlState == LongCtrlState.off
     force_slow_decel = sm['controlsState'].forceDecel
 

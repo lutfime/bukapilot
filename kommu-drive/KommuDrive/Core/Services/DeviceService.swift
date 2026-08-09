@@ -460,6 +460,85 @@ print('__KD_OK__')
     return (false, clean.isEmpty ? "Failed (no detail)" : clean)
   }
 
+  // MARK: - Map corner slowdown (params get/put over SSH)
+
+  /// Reads the map-corner-slowdown params from the device. Returns nil values on failure.
+  /// Runs a Python script in the openpilot venv (Params is the canonical reader).
+  struct MapCornerParams: Equatable {
+    var enabled: Bool
+    var budget: Double      // m/s^2, 1.0–4.0
+    var lookahead: Double   // meters
+    var valid: Bool         // MapCornerValid (live state)
+    var vCorner: Double     // m/s (live state, current advisory)
+  }
+
+  func fetchMapCornerParams() async -> MapCornerParams? {
+    // The script is base64-encoded so there are zero shell-quoting issues.
+    let script = """
+import sys; sys.path.insert(0, '/data/openpilot')
+from openpilot.common.params import Params
+p = Params()
+def g(k, d=''):
+    v = p.get(k)
+    return v if isinstance(v, str) else (d if v is None else str(v))
+print('enabled=' + g('MapCornerEnabled', '0'))
+print('budget=' + g('MapCornerBudget', '2.5'))
+print('lookahead=' + g('MapCornerLookahead', '200'))
+print('valid=' + g('MapCornerValid', '0'))
+print('vcorner=' + g('vCruiseMapCorner', '0'))
+"""
+    let b64 = Data(script.utf8).base64EncodedString()
+    let cmd = "/usr/local/venv/bin/python3 -c \"import base64; exec(base64.b64decode('\(b64)'))\""
+    do {
+      let out = try await execute(cmd)
+      var d: [String: String] = [:]
+      for line in out.split(separator: "\n") {
+        let parts = line.split(separator: "=", maxSplits: 1)
+        if parts.count == 2 { d[String(parts[0])] = String(parts[1]) }
+      }
+      return MapCornerParams(
+        enabled: d["enabled"] == "1" || d["enabled"] == "True" || d["enabled"] == "true",
+        budget: Double(d["budget"] ?? "2.5") ?? 2.5,
+        lookahead: Double(d["lookahead"] ?? "200") ?? 200.0,
+        valid: d["valid"] == "1" || d["valid"] == "True" || d["valid"] == "true",
+        vCorner: Double(d["vcorner"] ?? "0") ?? 0.0
+      )
+    } catch {
+      AppLog.error("fetchMapCornerParams failed: \(error)")
+      return nil
+    }
+  }
+
+  /// Writes a single map-corner param. `key` is one of MapCornerEnabled / MapCornerBudget / MapCornerLookahead.
+  /// Values are written verbatim ("0"/"1" for bools, "2.5" for floats).
+  func saveMapCornerParam(key: String, value: String) async -> (ok: Bool, detail: String) {
+    // Both key and value are base64-encoded to avoid any shell-quoting issues.
+    let script = """
+import sys, base64; sys.path.insert(0, '/data/openpilot')
+from openpilot.common.params import Params
+k = base64.b64decode('__KEY__').decode()
+v = base64.b64decode('__VAL__').decode()
+Params().put(k, v)
+print('__KD_OK__')
+"""
+    let k64 = Data(key.utf8).base64EncodedString()
+    let v64 = Data(value.utf8).base64EncodedString()
+    let filled = script.replacingOccurrences(of: "__KEY__", with: k64)
+                        .replacingOccurrences(of: "__VAL__", with: v64)
+    let b64 = Data(filled.utf8).base64EncodedString()
+    let cmd = "/usr/local/venv/bin/python3 -c \"import base64; exec(base64.b64decode('\(b64)'))\""
+    do {
+      let out = try await execute(cmd)
+      let clean = out.trimmingCharacters(in: .whitespacesAndNewlines)
+      if clean.contains("__KD_OK__") {
+        return (true, "Saved \(key)=\(value)")
+      }
+      return (false, clean.isEmpty ? "Failed (no output)" : clean)
+    } catch {
+      return (false, "SSH error: \(error)")
+    }
+  }
+
   // MARK: - Route browsing
 
   /// A drive: the base route name (without segment number) + how many segments.

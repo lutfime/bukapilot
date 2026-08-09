@@ -465,7 +465,8 @@ print('__KD_OK__')
   /// Reads the map-corner-slowdown params from the device. Returns nil values on failure.
   /// Runs a Python script in the openpilot venv (Params is the canonical reader).
   struct MapCornerParams: Equatable {
-    var enabled: Bool
+    var cscEnabled: Bool    // CSC (model-based) master toggle — what the Curve Slowdown toggle controls
+    var enabled: Bool       // MapCornerEnabled (mapd/OSM, opt-in; no UI toggle, SSH-only)
     var profile: Int        // 0=Gentle 1=Standard 2=Sport 3=Auto
     var valid: Bool         // MapCornerValid (live state)
     var vCorner: Double     // m/s (live state, current advisory)
@@ -480,6 +481,7 @@ p = Params()
 def g(k, d=''):
     v = p.get(k)
     return v if isinstance(v, str) else (d if v is None else str(v))
+print('csc=' + g('CSCEnabled', '1'))
 print('enabled=' + g('MapCornerEnabled', '0'))
 print('profile=' + g('MapCornerProfile', '1'))
 print('valid=' + g('MapCornerValid', '0'))
@@ -495,6 +497,7 @@ print('vcorner=' + g('vCruiseMapCorner', '0'))
         if parts.count == 2 { d[String(parts[0])] = String(parts[1]) }
       }
       return MapCornerParams(
+        cscEnabled: d["csc"] == "1" || d["csc"] == "True" || d["csc"] == "true",
         enabled: d["enabled"] == "1" || d["enabled"] == "True" || d["enabled"] == "true",
         profile: Int(d["profile"] ?? "1") ?? 1,
         valid: d["valid"] == "1" || d["valid"] == "True" || d["valid"] == "true",
@@ -517,8 +520,10 @@ from openpilot.common.params import Params
 k = base64.b64decode('__KEY__').decode()
 v = base64.b64decode('__VAL__').decode()
 p = Params()
-if k == 'MapCornerEnabled':
+if k in ('MapCornerEnabled', 'CSCEnabled'):
     p.put_bool(k, v.lower() in ('1', 'true'))
+elif k == 'MapCornerProfile':
+    p.put(k, int(v))
 else:
     p.put(k, float(v))
 print('__KD_OK__')

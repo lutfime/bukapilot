@@ -98,7 +98,7 @@ final class TuningViewModel: ObservableObject {
     await MainActor.run {
       self.mapParams = p
       if let p = p {
-        self.mapDraftEnabled = p.enabled
+        self.mapDraftEnabled = p.cscEnabled
         self.mapDraftProfile = p.profile
       }
     }
@@ -106,7 +106,7 @@ final class TuningViewModel: ObservableObject {
 
   var mapHasChanges: Bool {
     guard let p = mapParams else { return false }
-    return mapDraftEnabled != p.enabled || mapDraftProfile != p.profile
+    return mapDraftEnabled != p.cscEnabled || mapDraftProfile != p.profile
   }
 
   func saveMapParams() {
@@ -115,10 +115,10 @@ final class TuningViewModel: ObservableObject {
     Task {
       var results: [String] = []
       var hadError = false
-      if let p = mapParams, mapDraftEnabled != p.enabled {
+      if let p = mapParams, mapDraftEnabled != p.cscEnabled {
         let v = mapDraftEnabled ? "1" : "0"
-        let r = await service.saveMapCornerParam(key: "MapCornerEnabled", value: v)
-        results.append(r.ok ? "✓ Enabled = \(v)" : "✗ Enabled: \(r.detail)")
+        let r = await service.saveMapCornerParam(key: "CSCEnabled", value: v)
+        results.append(r.ok ? "✓ CSC = \(v)" : "✗ CSC: \(r.detail)")
         if !r.ok { hadError = true }
       }
       if let p = mapParams, mapDraftProfile != p.profile, !hadError {

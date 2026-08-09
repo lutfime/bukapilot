@@ -160,14 +160,19 @@ Reminder: **planner vars = WHEN/HOW-MUCH to slow; PI gains = HOW SMOOTHLY the ca
 
 # Map-Corner Slowdown (x70-map, NEW — handoff from other agent)
 
-**Branch:** `x70-map`, commit `e2dd6ba`. Ported from KisaPilot/sunnypilot mapd (pfeiferj, MIT). **NOT yet tested on device.**
+**Branch:** `x70-map`, commit `e2dd6ba`. Ported from KisaPilot/sunnypilot mapd (pfeiferj, MIT). **INSTALLED on device 2026-08-09** (staging-x70fix overlay): files deployed, deps installed, params_pyx.so rebuilt, `mapd_kommu` registered + manager boots clean, feature OFF by default. **On-road test (Test 2/5) still pending** (device was offroad/home wifi during install).
 
 **What it does:** new process `mapd_kommu` reads GPS (1 Hz), fetches OSM road geometry (Overpass, multi-endpoint fallback), matches position+heading to a road, computes upcoming curvature via spline → advisory corner speed `v = sqrt(budget/kappa)`. The longitudinal planner clamps `v_cruise = min(v_cruise, v_map)` before MPC → MPC plans a smooth decel. **Slowdown-only by `min()` construction** (can never accelerate). If GPS/OSM/match fails → `MapCornerValid=false` → planner ignores (identical to stock). Master enable **default off**.
 
 **Files (device side):** `selfdrive/mapd_kommu/` (10 files); `longitudinal_planner.py:~144` (the `min()` clamp, 16 lines); `system/manager/process_config.py:101-103` (KA2-only on-road process); `common/params_keys.h:47-51` (5 keys); `pyproject.toml` (+overpy, +scipy).
 **Tuning params:** `MapCornerEnabled` (off), `MapCornerBudget` (2.5 m/s²; lower=slower), `MapCornerLookahead` (200 m). Published: `vCruiseMapCorner`, `MapCornerValid`.
 
-**⚠️ DEVICE CONSTRAINT — param keys (known gotcha, see [[params-pyx-rebuild-constraint]]):** new param keys need `params_keys.h` + the `params_pyx` Cython extension rebuilt. **The device can't run scons/Cython** (no build toolchain) → `Params().put/get` for unregistered keys throws `UnknownKeyName` and **crashes mapd_kommu / the planner**. The handoff's Step 3 (`scons -j4`) will likely FAIL. Options: (a) test whether the device CAN scons-rebuild (verify, don't assume); (b) if it can't, the 5 keys must be added to the device's existing compiled whitelist by some means, OR mapd/planner rewritten to read/write via raw files (like `X70UsePidController`) instead of the Params API. **MUST resolve before enabling** — Test 3 (params round-trip) is the gate.
+**⚠️ DEVICE CONSTRAINT — param keys (RESOLVED 2026-08-09, see [[params-pyx-rebuild-constraint]]):** new param keys need `params_keys.h` + `params_pyx.so` rebuilt. The device **CAN** rebuild (scons+Cython+gcc present — earlier "can't rebuild" note was wrong). Verified procedure: backup `.so` → `rm prebuilt` → stub `panda/certs/{debug,release}.pub` (1024-bit RSA; fork lacks them, SConstruct parse fails) → `scons -j4 common/params_pyx.so` → verify round-trip → **`touch prebuilt`** (MUST restore or manager's boot `build.py` loops on scons failure → openpilot won't boot) → restart. Rollback = `cp params_pyx.so.stock back`.
+
+**BUGS found + fixed during install (commit a1413eb):** the device's params layer enforces STRICT typing (`PYTHON_2_CPP` cast table) — `(str,FLOAT)` and `(str,BOOL)` are absent → `TypeError`.
+- `mapd.py` wrote FLOAT `vCruiseMapCorner` as a format string → would crash mapd on publish. Fixed: `float(v_corner)`.
+- iOS `DeviceService.saveMapCornerParam` wrote all keys via `put(k, v)` str → BOOL/FLOAT writes fail silently. Fixed: dispatch by key (`put_bool` for enable, `float()` for budget/lookahead). **App needs rebuild+reinstall** for the slider to persist.
+- Deps: scipy drags a numpy upgrade (pyproject says `>=2.0` but device pinned to 1.26.4). Install `scipy==1.13.1 --no-deps` (numpy-1.x ABI, coexists with 1.26.4). venv root-owned → sudo; `/home` is 100M tmpfs → uv cache+TMPDIR on `/data`.
 
 **Install steps (handoff):** deploy files to `/data/openpilot` + mirror the 3 edited files to `/data/safe_staging/merged/` (overlay twin — see [[device-deploy-overlay-gotcha]]); `pip install overpy scipy` into `/usr/local/venv`; rebuild/bypass params keys; restart openpilot (`sudo systemctl restart kommu.service`); verify `mapd_kommu` in `ps aux` when on-road.
 

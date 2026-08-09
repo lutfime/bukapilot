@@ -82,7 +82,7 @@ class CarInterface(CarInterfaceBase):
         ret.lateralTuning.pid.kpV  = [0.0005, 0.02, 0.045, 0.10, 0.17]  # cut ~25-29% at 54/90 km/h to damp corner overshoot (comma #599: Kp x laggy feedback = oscillation). 0/18/126 km/h unchanged (no data). ITERATE: verify overshoot shrinks on next drive.
         ret.lateralTuning.pid.kiBP = [0.0, 5.0, 15.0, 25.0, 35.0]
         ret.lateralTuning.pid.kiV  = [0.001, 0.01, 0.09, 0.4, 0.5]
-        ret.lateralTuning.pid.kf   = 0.000006
+        ret.lateralTuning.pid.kf = 0.0000250
       else:
         # Torque (self-tuning via locationd/torqued) — OPT-IN (toggle off). Seed = torqued-converged; torqued refines online. Stock KP_INTERP rails at low speed on this car -> wobble (see result/lateral_analysis.py).
         ret.lateralTuning.init("torque")

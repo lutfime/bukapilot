@@ -22,6 +22,7 @@ struct SettingsSheet: View {
   @State private var modelTouched: Bool = false
 
   @State private var showRebootConfirm = false
+  @State private var showClearCacheConfirm = false
   @State private var wifiPasswordEntry: WifiNetwork? = nil
   @State private var wifiPasswordInput = ""
   @State private var showForgetWifiConfirm = false
@@ -34,6 +35,7 @@ struct SettingsSheet: View {
         updateSection
         wifiSection
         deviceActionsSection
+        cacheSection
         connectionSection
       }
       .navigationTitle("Settings")
@@ -68,6 +70,15 @@ struct SettingsSheet: View {
         if let ssid = viewModel.settings.activeWlanSSID {
           Text("Remove saved network '\(ssid)' from the device?")
         }
+      }
+      .alert("Clear Drive Cache?", isPresented: $showClearCacheConfirm) {
+        Button("Clear", role: .destructive) {
+          DeviceService.clearCache()
+          cacheSizeDisplay = "0 B"
+        }
+        Button("Cancel", role: .cancel) {}
+      } message: {
+        Text("Delete all \(DeviceService.cacheCount) cached drives (\(DeviceService.cacheSizeString))? They'll need to be re-parsed from the device next time.")
       }
       .sheet(item: $wifiPasswordEntry) { network in
         WifiPasswordSheet(
@@ -280,10 +291,28 @@ struct SettingsSheet: View {
 
       Button(role: .destructive) {
         viewModel.ble.forgetDevice()
-        dismiss()
       } label: {
         Label("Disconnect & Forget", systemImage: "antenna.radiowaves.left.and.right.slash")
       }
+    }
+  }
+
+  @State private var cacheSizeDisplay = ""
+
+  private var cacheSection: some View {
+    Section {
+      infoRow("Cached Drives", "\(DeviceService.cacheCount)")
+      infoRow("Cache Size", cacheSizeDisplay.isEmpty ? DeviceService.cacheSizeString : cacheSizeDisplay)
+      Button(role: .destructive) {
+        showClearCacheConfirm = true
+      } label: {
+        Label("Clear Drive Cache", systemImage: "trash")
+      }
+      .disabled(DeviceService.cacheCount == 0)
+    } header: {
+      Text("Drive Analysis Cache")
+    } footer: {
+      Text("Parsed drive data is cached so re-opening a drive is instant. Clear if storage is low.")
     }
   }
 

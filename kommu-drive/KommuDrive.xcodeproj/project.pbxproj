@@ -8,10 +8,23 @@
 
 /* Begin PBXBuildFile section */
 		C12A127930270B37004E4A7D /* Citadel in Frameworks */ = {isa = PBXBuildFile; productRef = 4D2A1B00_C1D1_0000_0000_000000000001 /* Citadel */; };
+		F2F1020230282001004E76DF /* libzstd.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = F2F1020130282001004E76DF /* libzstd.xcframework */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		F2F101F330281A0E004E76DF /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 4D2A1B00_0000_0000_0000_0000000000E0 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 4D2A1B00_0000_0000_0000_0000000000A0;
+			remoteInfo = KommuDrive;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		4D2A1B00_0000_0000_0000_0000000000B0 /* KommuDrive.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = KommuDrive.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		F2F101EF30281A0E004E76DF /* KommuDriveTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = KommuDriveTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		F2F1020130282001004E76DF /* libzstd.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = libzstd.xcframework; path = KommuDrive/Core/Libs/libzstd.xcframework; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -26,6 +39,7 @@
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		4D2A1B00_0000_0000_0000_000000000001 /* KommuDrive */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (4D2A1B00_0000_0000_0000_0000000000EE /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = KommuDrive; sourceTree = "<group>"; };
+		F2F101F030281A0E004E76DF /* KommuDriveTests */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = KommuDriveTests; sourceTree = "<group>"; };
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -34,6 +48,14 @@
 			buildActionMask = 2147483647;
 			files = (
 				C12A127930270B37004E4A7D /* Citadel in Frameworks */,
+				F2F1020230282001004E76DF /* libzstd.xcframework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F2F101EC30281A0E004E76DF /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -44,6 +66,7 @@
 			isa = PBXGroup;
 			children = (
 				4D2A1B00_0000_0000_0000_0000000000B0 /* KommuDrive.app */,
+				F2F101EF30281A0E004E76DF /* KommuDriveTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -52,7 +75,9 @@
 			isa = PBXGroup;
 			children = (
 				4D2A1B00_0000_0000_0000_000000000001 /* KommuDrive */,
+				F2F101F030281A0E004E76DF /* KommuDriveTests */,
 				4D2A1B00_0000_0000_0000_0000000000A1 /* Products */,
+				F2F1020130282001004E76DF /* libzstd.xcframework */,
 			);
 			sourceTree = "<group>";
 		};
@@ -82,6 +107,29 @@
 			productReference = 4D2A1B00_0000_0000_0000_0000000000B0 /* KommuDrive.app */;
 			productType = "com.apple.product-type.application";
 		};
+		F2F101EE30281A0E004E76DF /* KommuDriveTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F2F101F530281A0E004E76DF /* Build configuration list for PBXNativeTarget "KommuDriveTests" */;
+			buildPhases = (
+				F2F101EB30281A0E004E76DF /* Sources */,
+				F2F101EC30281A0E004E76DF /* Frameworks */,
+				F2F101ED30281A0E004E76DF /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				F2F101F430281A0E004E76DF /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				F2F101F030281A0E004E76DF /* KommuDriveTests */,
+			);
+			name = KommuDriveTests;
+			packageProductDependencies = (
+			);
+			productName = KommuDriveTests;
+			productReference = F2F101EF30281A0E004E76DF /* KommuDriveTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -89,8 +137,14 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
-				LastSwiftUpdateCheck = 1600;
+				LastSwiftUpdateCheck = 2700;
 				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+					F2F101EE30281A0E004E76DF = {
+						CreatedOnToolsVersion = 27.0;
+						TestTargetID = 4D2A1B00_0000_0000_0000_0000000000A0;
+					};
+				};
 			};
 			buildConfigurationList = 4D2A1B00_0000_0000_0000_0000000000C1 /* Build configuration list for PBXProject "KommuDrive" */;
 			compatibilityVersion = "Xcode 16.0";
@@ -109,12 +163,20 @@
 			projectRoot = "";
 			targets = (
 				4D2A1B00_0000_0000_0000_0000000000A0 /* KommuDrive */,
+				F2F101EE30281A0E004E76DF /* KommuDriveTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		4D2A1B00_0000_0000_0000_0000000000D2 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F2F101ED30281A0E004E76DF /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -131,7 +193,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		F2F101EB30281A0E004E76DF /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		F2F101F430281A0E004E76DF /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 4D2A1B00_0000_0000_0000_0000000000A0 /* KommuDrive */;
+			targetProxy = F2F101F330281A0E004E76DF /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		4D2A1B00_0000_0000_0000_0000000000C2 /* Debug */ = {
@@ -202,12 +279,17 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = KommuDrive/KommuDrive.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "";
 				DEVELOPMENT_TEAM = FKF3UFB34N;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/KommuDrive/Core/Libs",
+				);
 				INFOPLIST_FILE = KommuDrive/Resources/Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -224,6 +306,7 @@
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "KommuDrive/Core/Libs/KommuDrive-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -234,12 +317,17 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = KommuDrive/KommuDrive.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "";
 				DEVELOPMENT_TEAM = FKF3UFB34N;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/KommuDrive/Core/Libs",
+				);
 				INFOPLIST_FILE = KommuDrive/Resources/Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -256,8 +344,111 @@
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "KommuDrive/Core/Libs/KommuDrive-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		F2F101F630281A0E004E76DF /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = FKF3UFB34N;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = bijokmind.KommuDriveTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/KommuDrive.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/KommuDrive";
+			};
+			name = Debug;
+		};
+		F2F101F730281A0E004E76DF /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = FKF3UFB34N;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = bijokmind.KommuDriveTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/KommuDrive.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/KommuDrive";
 			};
 			name = Release;
 		};
@@ -278,6 +469,15 @@
 			buildConfigurations = (
 				4D2A1B00_0000_0000_0000_0000000000C2 /* Debug */,
 				4D2A1B00_0000_0000_0000_0000000000C3 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		F2F101F530281A0E004E76DF /* Build configuration list for PBXNativeTarget "KommuDriveTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F2F101F630281A0E004E76DF /* Debug */,
+				F2F101F730281A0E004E76DF /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

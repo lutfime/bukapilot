@@ -24,6 +24,8 @@ struct DeviceSettings: Equatable {
   let simStatus: String?
   let hotspotSsid: String?       // Kommu hotspot SSID (sent when hotspot enabled) — shown so the user can join
   let hotspotPassword: String?   // Kommu hotspot password (sent when hotspot enabled)
+  let hotspotIp: String?         // Device's IP on wlan1 when hotspot is enabled (from BLE)
+  let hotspotEnabled: Bool       // Is the device hotspot active?
 
   // Software toggles (these are the ones the kommu app shows + can save via saveToggle)
   let enabled: Bool              // OpenpilotEnabledToggle
@@ -57,6 +59,7 @@ struct DeviceSettings: Equatable {
     dongleID: nil, gitCommit: nil, currentVersion: nil, osVersion: nil,
     state: nil, isMetric: false, isOffroad: true, localIP: nil,
     activeWlanSSID: nil, networkType: nil, simStatus: nil, hotspotSsid: nil, hotspotPassword: nil,
+    hotspotIp: nil, hotspotEnabled: false,
     enabled: false, quietMode: false, experimentalMode: false,
     alcEnabled: false, ldwEnabled: false, recordFront: false, sshEnabled: false,
     usePidController: false, useSupercomboModel: false,
@@ -93,6 +96,8 @@ struct DeviceSettings: Equatable {
       simStatus: str("simStatus"),
       hotspotSsid: str("hotspotSsid"),
       hotspotPassword: str("hotspotPassword"),
+      hotspotIp: str("hotspotIp"),
+      hotspotEnabled: bool("hotspotEnabled"),
       enabled: bool("OpenpilotEnabledToggle"),
       quietMode: bool("QuietMode"),
       experimentalMode: bool("ConditionalExperimentalMode"),

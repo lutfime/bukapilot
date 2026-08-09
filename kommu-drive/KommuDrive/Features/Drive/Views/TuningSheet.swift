@@ -1,33 +1,22 @@
 import SwiftUI
 
-/// SSH-based PID tuning panel: reads the X70 PID/longitudinal/steer lines from
-/// interface.py on the device, grouped into sections, and saves changes via
-/// sed over SSH with a py_compile syntax check.
-///
-/// Shown inline as a tab panel (no modal sheet). The bottom tab bar handles
-/// navigation, so there's no Done/dismiss button.
+/// SSH-based PID tuning panel. Uses TuningViewModel for all logic.
 struct TuningSheet: View {
   @ObservedObject var viewModel: DriveSessionViewModel
-  @StateObject private var device = DeviceService()
-
-  @State private var sshConnected = false
-  @State private var sshStatus: String = ""
-  @State private var connecting = false
-
-  @State private var sections: [DeviceService.TuningSection] = []
-  @State private var editedLines: [Int: String] = [:]  // lineNum -> edited code
-  @State private var saveResult: String = ""
+  @StateObject private var vm = TuningViewModel()
+  @State private var manualIP: String = ""
+  @State private var showManualEntry: Bool = false
 
   var body: some View {
     NavigationStack {
       List {
-        if !sshConnected {
+        if !vm.isConnected {
           sshSetupSection
         } else {
-          ForEach(sections) { section in
+          ForEach(vm.sections) { section in
             tuningSection(section)
           }
-          if !sections.isEmpty {
+          if !vm.sections.isEmpty {
             saveSection
           }
         }
@@ -35,26 +24,73 @@ struct TuningSheet: View {
       .navigationTitle("PID Tuning")
       .navigationBarTitleDisplayMode(.inline)
     }
-    .onAppear { connect() }
-    .onDisappear { device.disconnect(); sshConnected = false }
+    .onAppear {
+      vm.updateSettings(viewModel.settings)
+      Task { await vm.connect() }
+    }
+    .onDisappear { vm.disconnect() }
   }
 
-  // MARK: SSH setup (connecting / error / retry)
+  // MARK: SSH setup
 
   private var sshSetupSection: some View {
     Section {
       VStack(spacing: 12) {
-        if sshStatus.isEmpty {
-          ProgressView("Connecting to device...")
+        if vm.status.isEmpty {
+          VStack(spacing: 6) {
+            ProgressView()
+            Text("Connecting to \(vm.hostLabel)…")
+              .font(.system(size: 13))
+            Text("WiFi: \(vm.currentSSID) → \(vm.resolvedIP)")
+              .font(.system(size: 11, design: .monospaced))
+              .foregroundStyle(.tertiary)
+          }
         } else {
           Image(systemName: "exclamationmark.triangle.fill")
             .foregroundStyle(.orange)
-          Text(sshStatus)
-            .font(.system(size: 13))
+          Text(vm.status)
+            .font(.system(size: 11, design: .monospaced))
             .foregroundStyle(.secondary)
-            .multilineTextAlignment(.center)
-          Button("Retry") { connect() }
+            .multilineTextAlignment(.leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .textSelection(.enabled)
+
+          if showManualEntry {
+            VStack(spacing: 8) {
+              Text("Enter device IP manually")
+                .font(.system(size: 12, weight: .medium))
+              TextField("192.168.0.9", text: $manualIP)
+                .font(.system(size: 14, design: .monospaced))
+                .textFieldStyle(.roundedBorder)
+                .keyboardType(.decimalPad)
+                .autocorrectionDisabled()
+              Button("Connect") {
+                let key = HotspotDetector.isOnDeviceHotspot ? "hotspot" : (HotspotDetector.currentSSID ?? "manual")
+                DeviceService.cacheIP(manualIP, forKey: key)
+                vm.updateSettings(viewModel.settings)
+                showManualEntry = false
+                Task { await vm.connect() }
+              }
+              .buttonStyle(.borderedProminent)
+              .disabled(manualIP.isEmpty)
+            }
+          } else {
+            Button("Enter IP manually") {
+              showManualEntry = true
+            }
             .buttonStyle(.bordered)
+          }
+
+          Button("Copy error") {
+            UIPasteboard.general.string = vm.status
+          }
+          .buttonStyle(.bordered)
+          .tint(.secondary)
+          Button("Retry") {
+            vm.updateSettings(viewModel.settings)
+            Task { await vm.connect() }
+          }
+          .buttonStyle(.bordered)
         }
       }
       .frame(maxWidth: .infinity)
@@ -64,7 +100,7 @@ struct TuningSheet: View {
     }
   }
 
-  // MARK: A tuning section (Lateral / Longitudinal / Steer)
+  // MARK: Tuning sections
 
   private func tuningSection(_ section: DeviceService.TuningSection) -> some View {
     Section {
@@ -79,8 +115,8 @@ struct TuningSheet: View {
               .foregroundStyle(.tertiary)
           }
           TextField("value", text: Binding(
-            get: { editedLines[line.lineNum] ?? line.value },
-            set: { editedLines[line.lineNum] = $0 }
+            get: { vm.editedLines[line.lineNum] ?? line.value },
+            set: { vm.editedLines[line.lineNum] = $0 }
           ), axis: .horizontal)
           .font(.system(size: 11, design: .monospaced))
           .textFieldStyle(.roundedBorder)
@@ -95,12 +131,12 @@ struct TuningSheet: View {
 
   private var saveSection: some View {
     Section {
-      let changed = editedLines.filter { lineNum, newValue in
-        let original = sections.flatMap(\.lines).first(where: { $0.lineNum == lineNum })?.value
+      let changed = vm.editedLines.filter { lineNum, newValue in
+        let original = vm.sections.flatMap(\.lines).first(where: { $0.lineNum == lineNum })?.value
         return newValue != original && !newValue.isEmpty
       }
       Button {
-        saveChanges(changed: changed)
+        vm.saveChanges()
       } label: {
         HStack {
           Image(systemName: "checkmark.circle.fill")
@@ -111,15 +147,15 @@ struct TuningSheet: View {
       .tint(.green)
       .disabled(changed.isEmpty)
 
-      if !saveResult.isEmpty {
+      if !vm.saveResult.isEmpty {
         VStack(alignment: .leading, spacing: 6) {
-          Text(saveResult)
+          Text(vm.saveResult)
             .font(.system(size: 11, design: .monospaced))
-            .foregroundStyle(saveResult.hasPrefix("✓") ? .green : .red)
+            .foregroundStyle(vm.saveResult.hasPrefix("✓") ? .green : .red)
             .textSelection(.enabled)
-          if saveResult.contains("✗") {
+          if vm.saveResult.contains("✗") {
             Button("Copy error") {
-              UIPasteboard.general.string = saveResult
+              UIPasteboard.general.string = vm.saveResult
             }
             .buttonStyle(.bordered)
             .tint(.secondary)
@@ -129,83 +165,7 @@ struct TuningSheet: View {
     } header: {
       Text("Apply")
     } footer: {
-      Text("Changes apply on the next drive. Each save is syntax-checked (py_compile) before committing.")
-    }
-  }
-
-  // MARK: SSH operations
-
-  /// Connects to the device. Uses the cached IP (from last successful connect)
-  /// for instant reconnect — no need to wait for BLE. Falls back to the live
-  /// BLE settings IP if no cache exists.
-  private func connect() {
-    guard !connecting else { return }
-    connecting = true
-    sshStatus = ""
-    sshConnected = false
-
-    Task {
-      // Prefer cached IP (instant), fall back to live BLE IP.
-      let host = DeviceService.cachedIP ?? viewModel.settings.localIP
-      await MainActor.run { connecting = false }
-      guard let host = host, !host.isEmpty else {
-        sshStatus = "No device IP yet. Connect to the device via BLE once, then it's cached for SSH."
-        return
-      }
-      do {
-        try await device.connect(host: host)
-        await MainActor.run { sshConnected = true }
-        await fetchLines()
-      } catch {
-        await MainActor.run {
-          sshStatus = device.connectionError ?? "SSH connection failed: \(error.localizedDescription)"
-        }
-      }
-    }
-  }
-
-  private func fetchLines() {
-    Task {
-      let fetched = await device.fetchTuningLines()
-      await MainActor.run {
-        self.sections = fetched
-        if fetched.isEmpty {
-          self.sshStatus = "No X70 tuning lines found. Is this an X70?"
-          self.sshConnected = false
-        }
-      }
-    }
-  }
-
-  private func saveChanges(changed: [Int: String]) {
-    saveResult = "Saving..."
-    Task {
-      var results: [String] = []
-      var hadError = false
-      // Build a map of lineNum → rawLine for the save call
-      let allLines = sections.flatMap(\.lines)
-      for (lineNum, newValue) in changed.sorted(by: { $0.key < $1.key }) {
-        guard let line = allLines.first(where: { $0.lineNum == lineNum }) else { continue }
-        let res = await device.saveTuningLine(lineNum: lineNum, rawLine: line.rawLine, newValue: newValue, file: line.file)
-        if res.ok {
-          results.append("✓ Line \(lineNum): \(res.detail)")
-        } else {
-          results.append("✗ Line \(lineNum): \(res.detail)")
-          hadError = true
-          break
-        }
-      }
-      await MainActor.run {
-        self.saveResult = results.isEmpty ? "No changes" : results.joined(separator: "\n")
-      }
-      if hadError {
-        // Revert the failed edit in the UI — clear editedLines so text fields
-        // fall back to the original device values.
-        await MainActor.run { self.editedLines.removeAll() }
-      } else {
-        await fetchLines()
-        await MainActor.run { self.editedLines.removeAll() }
-      }
+      Text("Changes apply on the next drive. Each save is syntax-checked before committing.")
     }
   }
 }

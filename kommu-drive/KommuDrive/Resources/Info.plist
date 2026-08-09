@@ -26,6 +26,8 @@
 	<string>KommuDrive uses Bluetooth to connect to your openpilot device and display live driving data.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
 	<string>KommuDrive uses Bluetooth to connect to your openpilot device and display live driving data.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>KommuDrive uses your location to detect which Wi-Fi network you're on for SSH connections to the device.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>KommuDrive connects to your openpilot device over the local Wi-Fi network to sync routes and tune PID values.</string>
 	<key>NSAppTransportSecurity</key>

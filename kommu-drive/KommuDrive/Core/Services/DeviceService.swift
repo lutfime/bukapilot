@@ -35,34 +35,101 @@ NcZvzke7rrW6ao064UW/AAAADmtvbW11ZHJpdmUtYXBwAQIDBAUGBw==
 
   private var client: SSHClient?
 
-  // MARK: - Cached device IP (survives app restart, no BLE wait needed)
+  // MARK: - IP cache (per network type, persisted to UserDefaults)
 
-  private static let ipKey = "KDLastDeviceIP"
+  /// Cached IPs keyed by network type: "hotspot" or the SSID.
+  /// So switching between home Wi-Fi and device hotspot always gets the right IP.
+  private static let cacheKey = "KDIPCache"
+  private static let cacheVersionKey = "KDIPCacheVersion"
+  private static let currentCacheVersion = 2  // bump to invalidate old caches
 
-  /// The last known device IP. Persisted to UserDefaults so SSH reconnects
-  /// instantly on app reopen — no need to wait for the BLE settings frame.
-  static var cachedIP: String? {
-    get { UserDefaults.standard.string(forKey: ipKey) }
-    set {
-      if let ip = newValue, !ip.isEmpty {
-        UserDefaults.standard.set(ip, forKey: ipKey)
-      } else {
-        UserDefaults.standard.removeObject(forKey: ipKey)
+  private static var ipCache: [String: String] {
+    get {
+      // Invalidate cache if version changed
+      let version = UserDefaults.standard.integer(forKey: cacheVersionKey)
+      if version != currentCacheVersion {
+        UserDefaults.standard.removeObject(forKey: cacheKey)
+        UserDefaults.standard.removeObject(forKey: "KDLastDeviceIP")
+        UserDefaults.standard.set(currentCacheVersion, forKey: cacheVersionKey)
+        return [:]
       }
+      return (UserDefaults.standard.dictionary(forKey: cacheKey) as? [String: String]) ?? [:]
+    }
+    set { UserDefaults.standard.set(newValue, forKey: cacheKey) }
+  }
+
+  /// Clears the entire IP cache (call when cache is stale/wrong).
+  static func clearIPCache() {
+    UserDefaults.standard.removeObject(forKey: cacheKey)
+    UserDefaults.standard.removeObject(forKey: "KDLastDeviceIP")  // old format cleanup
+  }
+
+  /// Backwards compat — returns the cached IP for the current network.
+  static var cachedIP: String? {
+    let ssid = HotspotDetector.isOnDeviceHotspot ? "hotspot" : (HotspotDetector.currentSSID ?? "unknown")
+    return ipCache[ssid]
+  }
+
+  /// Caches an IP for a specific network key.
+  static func cacheIP(_ ip: String, forKey key: String) {
+    var cache = ipCache
+    cache[key] = ip
+    UserDefaults.standard.set(cache, forKey: cacheKey)
+  }
+
+  /// Gets the cached IP for a specific network key.
+  static func cachedIP(for key: String) -> String? {
+    ipCache[key]
+  }
+
+  /// Human-readable description of all cached IPs (for debug/error messages).
+  static var ipCacheDescription: String {
+    let cache = ipCache
+    if cache.isEmpty { return "(empty)" }
+    return cache.map { "\($0.key): \($0.value)" }.joined(separator: ", ")
+  }
+
+  // MARK: - Host resolution
+
+  /// Current network key: "hotspot" if on device hotspot, else the SSID.
+  private static var networkKey: String {
+    HotspotDetector.isOnDeviceHotspot ? "hotspot" : (HotspotDetector.currentSSID ?? "unknown")
+  }
+
+  /// Resolves the best host IP.
+  /// Priority:
+  /// 1. On hotspot → hotspot IP from BLE (or cache for "hotspot")
+  /// 2. On Wi-Fi → localIP from BLE (or cache for the SSID)
+  /// No fallback to other networks' IPs — that's how stale IPs get used.
+  static func resolveHost(hotspotIp: String?, localIP: String?) -> String? {
+    let key = networkKey
+
+    if HotspotDetector.isOnDeviceHotspot {
+      // On hotspot: BLE hotspot IP, then cache
+      if let hip = hotspotIp, !hip.isEmpty { return hip }
+      return cachedIP(for: key)
+    } else {
+      // On Wi-Fi: BLE localIP, then cache for this SSID
+      if let lip = localIP, !lip.isEmpty { return lip }
+      return cachedIP(for: key)
     }
   }
 
-  /// Convenience: use the cached IP if available, else nil.
-  var lastKnownIP: String? { Self.cachedIP }
+  /// Human-readable label for the connection target.
+  static func hostLabel(ssid: String?) -> String {
+    if HotspotDetector.isOnDeviceHotspot { return "device hotspot" }
+    if let ssid = ssid, !ssid.isEmpty { return ssid }
+    return "device"
+  }
 
   // MARK: - Connection
 
   /// Connects to the device. Throws on failure — the caller surfaces the error.
-  /// On success, caches the IP for instant reconnect next time.
+  /// On success, caches the IP for the current network so reconnect is instant.
   func connect(host: String) async throws {
     connectionError = nil
-    Self.cachedIP = host    // cache even before connecting so retry is instant
-    connectionError = nil
+    // Cache this IP for the current network (hotspot or SSID)
+    Self.cacheIP(host, forKey: Self.networkKey)
     let key = try parseEd25519PrivateKey(sshKey)
     let settings = SSHClientSettings(
       host: host,
@@ -77,6 +144,17 @@ NcZvzke7rrW6ao064UW/AAAADmtvbW11ZHJpdmUtYXBwAQIDBAUGBw==
       AppLog.error("SSH connect to \(sshUser)@\(host):\(sshPort) failed: \(error)")
       throw error
     }
+  }
+
+  /// Resolves the host and connects in one call. Returns the host that was used.
+  @discardableResult
+  func connectIfNeeded(hotspotIp: String?, localIP: String?) async throws -> String {
+    if isConnected { return Self.cachedIP ?? "" }
+    guard let host = Self.resolveHost(hotspotIp: hotspotIp, localIP: localIP) else {
+      throw SSHError.notConnected
+    }
+    try await connect(host: host)
+    return host
   }
 
   var isConnected: Bool { client?.isConnected ?? false }
@@ -94,6 +172,57 @@ NcZvzke7rrW6ao064UW/AAAADmtvbW11ZHJpdmUtYXBwAQIDBAUGBw==
       AppLog.error("SSH execute failed: \(error)")
       throw error
     }
+  }
+
+  /// Downloads a file from the device in chunks via SSH dd+base64.
+  /// Chunked download avoids Citadel exec output truncation on large files.
+  func downloadFile(remotePath: String, to localURL: URL,
+                     progress: ((Double) -> Void)? = nil) async throws {
+    guard let client = client else { throw SSHError.notConnected }
+
+    // Get file size
+    let sizeOut = try await execute("stat -c %s \(remotePath) 2>/dev/null || echo 0")
+    let totalBytes = Int64(sizeOut.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+    if totalBytes == 0 {
+      throw SSHError.invalidKey("File not found or empty: \(remotePath)")
+    }
+
+    progress?(0.02)
+
+    // Download in 512KB chunks via dd + base64 (each chunk → ~700KB base64, safe for exec)
+    let chunkSize: Int64 = 512 * 1024
+    var offset: Int64 = 0
+    var fileData = Data()
+
+    while offset < totalBytes {
+      let toRead = min(chunkSize, totalBytes - offset)
+      let cmd = "dd if=\(remotePath) bs=1 skip=\(offset) count=\(toRead) 2>/dev/null | base64 -w0"
+      let b64 = try await execute(cmd)
+      let cleaned = b64.trimmingCharacters(in: .whitespacesAndNewlines)
+      if let chunkData = Data(base64Encoded: cleaned) {
+        fileData.append(chunkData)
+        offset += Int64(chunkData.count)
+      } else {
+        throw SSHError.invalidKey("Failed to decode chunk at offset \(offset)")
+      }
+      progress?(0.02 + Double(offset) / Double(totalBytes) * 0.9)
+    }
+
+    try fileData.write(to: localURL)
+    progress?(1.0)
+  }
+
+  /// Finds ALL qlog paths for a route (one per segment).
+  func findAllQlogPaths(route: String) async -> [String] {
+    let base = "/data/media/0/realdata/\(route)"
+    var paths: [String] = []
+    for ext in ["zst", "bz2"] {
+      let cmd = "ls -1 \(base)--*/qlog.\(ext) 2>/dev/null"
+      if let out = try? await execute(cmd) {
+        paths.append(contentsOf: out.split(separator: "\n").map { String($0).trimmingCharacters(in: .whitespaces) })
+      }
+    }
+    return paths.sorted()
   }
 
   func disconnect() {
@@ -161,19 +290,20 @@ if start is not None:
                 out.append({'line': i + 1, 'raw': raw, 'value': val, 'key': p, 'file': 'interface'})
                 break
 
-# 2. Read LAT_SMOOTH_SECONDS from modeld.py (separate file, same section concept)
-modeld = '\(modeldPath)'
-try:
-    with open(modeld) as f:
-        mlines = f.readlines()
-    for i, l in enumerate(mlines):
-        if 'LAT_SMOOTH_SECONDS =' in l and 'LAT_SMOOTH_SECONDS_011' not in l:
-            raw = l.rstrip('\\n')
-            val = raw.split('=', 1)[1].strip() if '=' in raw else ''
-            if '#' in val:
-                val = val.split('#', 1)[0].strip()
-            out.append({'line': i + 1, 'raw': raw, 'value': val, 'key': 'LAT_SMOOTH_SECONDS =', 'file': 'modeld'})
-except: pass
+# 2. Read LAT_SMOOTH_SECONDS from modeld.py (try both paths)
+for modeld in ['\(modeldPath)', '\(modeldLower)']:
+    try:
+        with open(modeld) as f:
+            mlines = f.readlines()
+        for i, l in enumerate(mlines):
+            if 'LAT_SMOOTH_SECONDS =' in l and 'LAT_SMOOTH_SECONDS_011' not in l:
+                raw = l.rstrip('\\n')
+                val = raw.split('=', 1)[1].strip() if '=' in raw else ''
+                if '#' in val:
+                    val = val.split('#', 1)[0].strip()
+                out.append({'line': i + 1, 'raw': raw, 'value': val, 'key': 'LAT_SMOOTH_SECONDS =', 'file': 'modeld'})
+        break
+    except: pass
 
 print(json.dumps(out))
 "
@@ -338,6 +468,11 @@ print('__KD_OK__')
     let segmentCount: Int
     let firstSegmentDir: String   // the actual dir name to read qlog from
     var id: String { route }
+
+    /// Creates a display ViewModel for this drive.
+    var routeVM: DriveRouteVM {
+      DriveRouteVM(rawRoute: route, segmentCount: segmentCount)
+    }
   }
 
   /// Lists drives, grouping segments that share a base route name.
@@ -379,131 +514,258 @@ print('__KD_OK__')
     return Int(suffix) ?? 0
   }
 
-  /// Fetches drive data by parsing qlogs on the device. Merges ALL segments of
-  /// a drive (not just segment 0) so multi-segment drives show complete data.
-  /// Returns (data, error) so the UI can show the actual failure reason.
-  func fetchDriveData(route: String) async -> (data: DriveData?, error: String?) {
-    // Write the Python script to a temp file on the device to avoid shell quoting hell,
-    // then run it. Wraps everything in try/except so errors come back as JSON, not crashes.
+  // MARK: - Drive data cache (disk)
+
+  /// Cache directory for parsed drive JSON files.
+  static var cacheDir: URL {
+    let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+    let dir = docs.appendingPathComponent("DriveCache", isDirectory: true)
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+
+    // Invalidate old cache versions
+    let versionKey = "KDDriveCacheVersion"
+    let currentVersion = 2
+    if UserDefaults.standard.integer(forKey: versionKey) != currentVersion {
+      try? FileManager.default.removeItem(at: dir)
+      try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+      UserDefaults.standard.set(currentVersion, forKey: versionKey)
+    }
+
+    return dir
+  }
+
+  /// Total size of the drive cache in bytes.
+  static var cacheSizeBytes: Int {
+    guard let files = try? FileManager.default.contentsOfDirectory(at: cacheDir, includingPropertiesForKeys: [.fileSizeKey]) else { return 0 }
+    return files.reduce(0) { $0 + ((try? $1.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0) }
+  }
+
+  /// Human-readable cache size (e.g. "2.3 MB").
+  static var cacheSizeString: String {
+    let b = cacheSizeBytes
+    if b > 1_000_000 { return String(format: "%.1f MB", Double(b) / 1_000_000) }
+    if b > 1_000 { return String(format: "%.0f KB", Double(b) / 1_000) }
+    return "\(b) B"
+  }
+
+  /// Number of cached drives.
+  static var cacheCount: Int {
+    (try? FileManager.default.contentsOfDirectory(at: cacheDir, includingPropertiesForKeys: nil))?.count ?? 0
+  }
+
+  /// Clears all cached drive data.
+  static func clearCache() {
+    try? FileManager.default.removeItem(at: cacheDir)
+    try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+  }
+
+  /// Cache file path for a route.
+  private func cacheFile(for route: String) -> URL {
+    Self.cacheDir.appendingPathComponent("\(route).json")
+  }
+
+  /// Lists all cached drives (from the DriveCache directory).
+  /// Works offline — no SSH needed.
+  static func cachedDrives() -> [Drive] {
+    guard let entries = try? FileManager.default.contentsOfDirectory(at: cacheDir, includingPropertiesForKeys: nil) else {
+      return []
+    }
+    // JSON files = parsed drive data, route dirs = raw qlog downloads
+    var routes = Set<String>()
+    for entry in entries {
+      let name = entry.lastPathComponent
+      if name.hasSuffix(".json") {
+        let route = String(name.dropLast(5))
+        routes.insert(route)
+      } else if entry.hasDirectoryPath {
+        // It's a qlog directory — also a cached drive
+        routes.insert(name)
+      }
+    }
+    return routes.sorted().reversed().map { route in
+      // Count segments from the qlog dir if present
+      let dir = cacheDir.appendingPathComponent(route, isDirectory: true)
+      let segCount = (try? FileManager.default.contentsOfDirectory(atPath: dir.path))?.count ?? 0
+      return Drive(route: route, segmentCount: segCount, firstSegmentDir: route)
+    }
+  }
+
+  /// Loads cached drive data if available.
+  func loadCachedDriveData(route: String) -> DriveData? {
+    let file = cacheFile(for: route)
+    guard let data = try? Data(contentsOf: file) else { return nil }
+    return try? JSONDecoder().decode(DriveData.self, from: data)
+  }
+
+  /// Saves drive data to cache for future re-use.
+  func saveDriveDataToCache(_ data: DriveData, route: String) {
+    let file = cacheFile(for: route)
+    if let encoded = try? JSONEncoder().encode(data) {
+      try? encoded.write(to: file)
+    }
+  }
+
+  /// Fetches drive data: downloads the qlog file (with progress), then parses it
+  /// on the device (fast — segment 0 only, ~10Hz qlog). Both raw qlog and parsed
+  /// JSON are cached on disk. Re-opening is instant.
+  func fetchDriveData(route: String, progress: ((Double, String) -> Void)? = nil) async -> (data: DriveData?, error: String?) {
+    // 1. Check parsed cache first — instant return.
+    if let cached = loadCachedDriveData(route: route), !cached.isEmpty {
+      progress?(1.0, "Loaded from cache")
+      return (cached, nil)
+    }
+
+    // 2. Find ALL qlog paths (one per segment)
+    progress?(0.0, "Finding qlogs…")
+    let qlogPaths = await findAllQlogPaths(route: route)
+    if qlogPaths.isEmpty {
+      return (nil, "No qlogs found for this route on the device.")
+    }
+
+    // 3. Download ALL raw qlog files to the phone (for sharing + caching)
+    let localDir = Self.cacheDir.appendingPathComponent(route, isDirectory: true)
+    try? FileManager.default.createDirectory(at: localDir, withIntermediateDirectories: true)
+
+    let totalSegments = qlogPaths.count
+    for (i, qlogPath) in qlogPaths.enumerated() {
+      let ext = qlogPath.hasSuffix(".bz2") ? "bz2" : "zst"
+      let localFile = localDir.appendingPathComponent("qlog-\(i).\(ext)")
+      if !FileManager.default.fileExists(atPath: localFile.path) {
+        let pct = Double(i) / Double(totalSegments)
+        progress?(pct * 0.7, "Downloading segment \(i+1)/\(totalSegments)…")
+        do {
+          try await downloadFile(remotePath: qlogPath, to: localFile)
+        } catch {
+          return (nil, "Download failed (segment \(i+1)): \(error.localizedDescription)")
+        }
+      }
+    }
+    progress?(0.75, "Downloaded \(totalSegments) segment\(totalSegments == 1 ? "" : "s")")
+
+    // 4. Parse ALL qlogs LOCALLY (native Swift, no device Python needed)
+    progress?(0.8, "Parsing signals…")
+    var combined = DriveData()
+    let routeStart = parseRouteStartTime(route)
+
+    for (i, qlogPath) in qlogPaths.enumerated() {
+      let ext = qlogPath.hasSuffix(".bz2") ? "bz2" : "zst"
+      let localFile = localDir.appendingPathComponent("qlog-\(i).\(ext)")
+      guard FileManager.default.fileExists(atPath: localFile.path),
+            let qlogData = try? Data(contentsOf: localFile) else {
+        continue
+      }
+      let parsed = QlogParser.parse(qlogData, routeStartTime: i == 0 ? routeStart : 0)
+      combined.t.append(contentsOf: parsed.t)
+      combined.v.append(contentsOf: parsed.v)
+      combined.c.append(contentsOf: parsed.c)
+      combined.d.append(contentsOf: parsed.d)
+      combined.a.append(contentsOf: parsed.a)
+      combined.o.append(contentsOf: parsed.o)
+      combined.p.append(contentsOf: parsed.p)
+      combined.i.append(contentsOf: parsed.i)
+      combined.f.append(contentsOf: parsed.f)
+      combined.sat.append(contentsOf: parsed.sat)
+      combined.eng.append(contentsOf: parsed.eng)
+      combined.trq.append(contentsOf: parsed.trq)
+      let pct = 0.8 + (Double(i + 1) / Double(totalSegments)) * 0.2
+      progress?(pct, "Parsed segment \(i+1)/\(totalSegments)…")
+    }
+
+    if combined.isEmpty {
+      return (nil, "No controlsState events found in any qlog.")
+    }
+
+    progress?(1.0, "Done")
+    saveDriveDataToCache(combined, route: route)
+    return (combined, nil)
+  }
+
+  /// Parses the route start time from the route name (UTC).
+  private func parseRouteStartTime(_ route: String) -> Double {
+    let parts = route.split(separator: "--")
+    guard parts.count >= 2 else { return 0 }
+    let dateStr = "\(parts[0]) \(parts[1])"
+    let df = DateFormatter()
+    df.dateFormat = "yyyy-MM-dd HH-mm-ss"
+    df.timeZone = TimeZone(identifier: "UTC")
+    return df.date(from: dateStr)?.timeIntervalSince1970 ?? 0
+  }
+
+  /// Runs the parse script on device, parsing ALL qlog segments.
+  private func parseQlogsOnDevice(route: String, qlogPaths: [String]) async -> (data: DriveData?, error: String?) {
+    // Pass the qlog paths as a JSON array (base64 to avoid quoting issues)
+    let pathsJSON = (try? JSONEncoder().encode(qlogPaths)).flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
+    let pathsB64 = Data(pathsJSON.utf8).base64EncodedString()
+
     let script = """
 cat > /tmp/kd_parse.py <<'PYEOF'
-import json, zstandard, glob, os, bz2, sys, traceback
+import json, zstandard, bz2, sys, traceback, calendar, time, base64
 try:
     from cereal import log as capnp_log
     EV = capnp_log.Event
     route_name = '\(route)'
-    base = '/data/media/0/realdata/' + route_name
-
-    # Parse the route name to get the wall-clock start time (UTC).
-    # Route format: "2026-08-08--03-55-22" → Unix timestamp.
-    import time as _time
-    _date_part = route_name.split('--')[0] + ' ' + route_name.split('--')[1]
+    qlog_paths = json.loads(base64.b64decode('\(pathsB64)').decode('utf-8'))
     try:
-        _route_start = _time.mktime(_time.strptime(_date_part, '%Y-%m-%d %H-%M-%S'))
-        # Route name is UTC, but mktime uses local timezone. Force UTC interpretation.
-        import calendar as _cal
-        _t = _time.strptime(_date_part, '%Y-%m-%d %H-%M-%S')
-        _route_start = _cal.timegm(_t)
+        parts = route_name.split('--')
+        dp = parts[0] + ' ' + parts[1]
+        route_start = calendar.timegm(time.strptime(dp, '%Y-%m-%d %H-%M-%S'))
     except:
-        _route_start = 0
+        route_start = 0
 
-    qlogs = sorted(glob.glob(base + '--*/qlog.zst')) + sorted(glob.glob(base + '--*/qlog.bz2'))
-    if not qlogs and os.path.isdir(base):
-        qlogs = sorted(glob.glob(base + '/qlog.zst')) + sorted(glob.glob(base + '/qlog.bz2'))
-    if not qlogs:
-        print(json.dumps({'_error': 'No qlog files found for this route.'}))
-        sys.exit(0)
-
-    def decompress(path):
-        if path.endswith('.zst'):
+    def decompress(p):
+        if p.endswith('.zst'):
             dctx = zstandard.ZstdDecompressor()
-            with open(path, 'rb') as f:
-                return dctx.stream_reader(f).read()
+            with open(p, 'rb') as f: return dctx.stream_reader(f).read()
         else:
-            with open(path, 'rb') as f:
-                return bz2.decompress(f.read())
+            with open(p, 'rb') as f: return bz2.decompress(f.read())
 
     data = {'t':[], 'v':[], 'c':[], 'd':[], 'a':[], 'o':[], 'p':[], 'i':[], 'f':[], 'sat':[], 'eng':[], 'trq':[]}
-    import bisect
-    # Use a list of dicts so all fields for one event are added atomically.
-    cs_events = []  # [{t, c, d, a, eng, p, i, f, sat}]
-    vs_times = []; vs_v = []; vs_o = []; vs_trq = []
-    errors = []
-    for path in qlogs:
+    first_mono = None
+    last_v = 0.0; last_o = 0; last_trq = 0.0
+
+    for path in qlog_paths:
         try:
-            raw = decompress(path)
-            events = list(EV.read_multiple_bytes(raw))
+            events = list(EV.read_multiple_bytes(decompress(path)))
             for e in events:
                 try: w = e.which()
                 except: continue
+                mono = e.logMonoTime / 1e9
+                if first_mono is None: first_mono = mono
+                t_wall = route_start + (mono - first_mono)
                 if w == 'carState':
-                    vs_times.append(e.logMonoTime/1e9)
-                    vs_v.append(round(float(e.carState.vEgo), 2))
-                    vs_o.append(1 if e.carState.steeringPressed else 0)
-                    vs_trq.append(round(float(getattr(e.carState, 'steeringTorque', 0)), 1))
+                    try: last_v = round(float(e.carState.vEgo), 2)
+                    except: pass
+                    try: last_o = 1 if e.carState.steeringPressed else 0
+                    except: pass
+                    try: last_trq = round(float(getattr(e.carState, 'steeringTorque', 0)), 1)
+                    except: pass
                 elif w == 'controlsState':
                     cs = e.controlsState
-                    row = {'t': e.logMonoTime/1e9, 'c': 0, 'd': 0, 'a': 0, 'eng': 0, 'p': 0, 'i': 0, 'f': 0, 'sat': 0}
-                    try: row['d'] = round(float(cs.desiredCurvature), 5)
-                    except: pass
-                    try: row['a'] = round(float(cs.curvature), 5)
-                    except: pass
-                    try: row['eng'] = 1 if cs.enabled else 0
-                    except: pass
+                    data['t'].append(round(t_wall, 2))
+                    data['v'].append(last_v); data['o'].append(last_o); data['trq'].append(last_trq)
+                    try: data['d'].append(round(float(cs.desiredCurvature), 5))
+                    except: data['d'].append(0)
+                    try: data['a'].append(round(float(cs.curvature), 5))
+                    except: data['a'].append(0)
+                    try: data['eng'].append(1 if cs.enabled else 0)
+                    except: data['eng'].append(0)
                     try:
                         pid = cs.lateralControlState.pidState
-                        try: row['c'] = round(float(pid.output), 4)
-                        except: pass
-                        try: row['p'] = round(float(getattr(pid, 'p', 0)), 4)
-                        except: pass
-                        try: row['i'] = round(float(getattr(pid, 'i', 0)), 4)
-                        except: pass
-                        try: row['f'] = round(float(getattr(pid, 'f', 0)), 4)
-                        except: pass
-                        try: row['sat'] = 1 if getattr(pid, 'saturated', False) else 0
-                        except: pass
-                    except: pass
-                    cs_events.append(row)
-        except Exception as ex:
-            errors.append(os.path.basename(os.path.dirname(path)) + ': ' + str(ex))
+                        data['c'].append(round(float(pid.output), 4))
+                        try: data['p'].append(round(float(getattr(pid, 'p', 0)), 4))
+                        except: data['p'].append(0)
+                        try: data['i'].append(round(float(getattr(pid, 'i', 0)), 4))
+                        except: data['i'].append(0)
+                        try: data['f'].append(round(float(getattr(pid, 'f', 0)), 4))
+                        except: data['f'].append(0)
+                        try: data['sat'].append(1 if getattr(pid, 'saturated', False) else 0)
+                        except: data['sat'].append(0)
+                    except:
+                        data['c'].append(0); data['p'].append(0); data['i'].append(0); data['f'].append(0); data['sat'].append(0)
+        except: pass
 
-    # Convert logMonoTime (seconds since boot) → wall-clock Unix timestamp.
-    # Anchor: route name has the real UTC start time. Offset all timestamps from
-    # the first event so they show actual wall-clock time.
-    first_mono = cs_events[0]['t'] if cs_events else 0
-    for row in cs_events:
-        # Wall-clock = route_start_utc + elapsed_since_first_event
-        t_wall = _route_start + (row['t'] - first_mono)
-        t_cs = row['t']  # keep boot time for bisect lookup against vs_times
-        data['t'].append(round(t_wall, 2))
-        data['c'].append(row['c'])
-        data['d'].append(row['d'])
-        data['a'].append(row['a'])
-        data['eng'].append(row['eng'])
-        data['p'].append(row['p'])
-        data['i'].append(row['i'])
-        data['f'].append(row['f'])
-        data['sat'].append(row['sat'])
-        if vs_times:
-            pos = bisect.bisect_left(vs_times, t_cs)
-            if pos == 0:
-                nearest = 0
-            elif pos >= len(vs_times):
-                nearest = len(vs_times) - 1
-            else:
-                nearest = pos - 1 if (t_cs - vs_times[pos-1]) <= (vs_times[pos] - t_cs) else pos
-            data['v'].append(vs_v[nearest])
-            data['o'].append(vs_o[nearest])
-            data['trq'].append(vs_trq[nearest])
-        else:
-            data['v'].append(0)
-            data['o'].append(0)
-            data['trq'].append(0)
-
-    if not data['t'] and errors:
-        print(json.dumps({'_error': 'Failed to parse: ' + '; '.join(errors[:3])}))
-    elif not data['t']:
-        print(json.dumps({'_error': 'No controlsState events found.'}))
+    if not data['t']:
+        print(json.dumps({'_error': 'No controlsState events found in any segment.'}))
     else:
         print(json.dumps(data))
 except Exception:
@@ -511,7 +773,7 @@ except Exception:
 PYEOF
 cd /data/openpilot && PYTHONPATH=/data/openpilot /usr/local/venv/bin/python /tmp/kd_parse.py; rm -f /tmp/kd_parse.py
 """
-    // Execute — surface the REAL error, don't swallow it with try?
+    // Execute the parse script
     let output: String
     do {
       output = try await execute(script)
@@ -519,28 +781,22 @@ cd /data/openpilot && PYTHONPATH=/data/openpilot /usr/local/venv/bin/python /tmp
       return (nil, "SSH execute failed: \(error.localizedDescription)")
     }
 
-    // Check if the device returned anything at all
     let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
     if trimmed.isEmpty {
       return (nil, "Device returned empty output. The Python script may have crashed.")
     }
-
     guard let jsonData = output.data(using: .utf8) else {
       return (nil, "Invalid response encoding")
     }
-
-    // Check for error embedded in JSON
     if let dict = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
        let errMsg = dict["_error"] as? String {
       return (nil, errMsg)
     }
-
-    // Try to decode — if it fails, show the raw output so the user can see what went wrong
     do {
       let parsed = try JSONDecoder().decode(DriveData.self, from: jsonData)
+      AppLog.info("parseQlogs: \(parsed.t.count) points, \(qlogPaths.count) segments")
       return (parsed, nil)
     } catch {
-      // Show first 500 chars of raw output for debugging
       let preview = String(output.prefix(500))
       return (nil, "Decode failed: \(error.localizedDescription)\n\nRaw output:\n\(preview)")
     }
@@ -743,33 +999,45 @@ struct DownsampledData {
   let eng: [Int]    // openpilot enabled (0/1)
   let trq: [Double] // steering torque
 
-  var duration: Double { (t.last ?? 0) - (t.first ?? 0) }
-  var durationString: String {
+  // All summary stats are precomputed (let), not computed on every render.
+  let duration: Double
+  let durationString: String
+  let avgSpeed: Double
+  let avgSpeedString: String
+  let maxSpeed: Double
+  let maxSpeedString: String
+  let avgStep: Double
+  let maxStep: Double
+  let overrides: Int
+  let tuningGuidance: String
+
+  init(t: [Double], v: [Double], c: [Double], d: [Double], a: [Double], o: [Int],
+       p: [Double], i: [Double], f: [Double], sat: [Int], eng: [Int], trq: [Double]) {
+    self.t = t; self.v = v; self.c = c; self.d = d; self.a = a; self.o = o
+    self.p = p; self.i = i; self.f = f; self.sat = sat; self.eng = eng; self.trq = trq
+
+    duration = (t.last ?? 0) - (t.first ?? 0)
     let m = Int(duration) / 60
     let s = Int(duration) % 60
-    return String(format: "%d:%02d", m, s)
-  }
-  var avgSpeed: Double { v.isEmpty ? 0 : v.reduce(0, +) / Double(v.count) * 3.6 }
-  var avgSpeedString: String { String(format: "%.0f km/h", avgSpeed) }
-  var maxSpeed: Double { (v.map { $0 * 3.6 }.max()) ?? 0 }
-  var maxSpeedString: String { String(format: "%.0f km/h", maxSpeed) }
+    durationString = String(format: "%d:%02d", m, s)
 
-  var avgStep: Double {
-    guard c.count > 1 else { return 0 }
-    var total = 0.0
-    for i in 1..<c.count { total += abs(c[i] - c[i-1]) }
-    return total / Double(c.count - 1)
-  }
-  var maxStep: Double {
-    guard c.count > 1 else { return 0 }
-    var mx = 0.0
-    for i in 1..<c.count { mx = Swift.max(mx, abs(c[i] - c[i-1])) }
-    return mx
-  }
-  var overrides: Int { o.filter { $0 == 1 }.count }
+    avgSpeed = v.isEmpty ? 0 : v.reduce(0, +) / Double(v.count) * 3.6
+    avgSpeedString = String(format: "%.0f km/h", avgSpeed)
+    maxSpeed = (v.map { $0 * 3.6 }.max()) ?? 0
+    maxSpeedString = String(format: "%.0f km/h", maxSpeed)
 
-  /// Plain-English guidance on what the data suggests for tuning.
-  var tuningGuidance: String {
+    if c.count > 1 {
+      var total = 0.0
+      for idx in 1..<c.count { total += abs(c[idx] - c[idx-1]) }
+      avgStep = total / Double(c.count - 1)
+      var mx = 0.0
+      for idx in 1..<c.count { mx = Swift.max(mx, abs(c[idx] - c[idx-1])) }
+      maxStep = mx
+    } else {
+      avgStep = 0; maxStep = 0
+    }
+    overrides = o.filter { $0 == 1 }.count
+
     var lines: [String] = []
     if avgStep > 0.05 {
       lines.append("• Steer steps are large (avg \(String(format: "%.3f", avgStep))). Increase LAT_SMOOTH_SECONDS (0.15→0.2) to smooth the model's desired curvature before the PID sees it.")
@@ -783,6 +1051,6 @@ struct DownsampledData {
       lines.append("• High override count (\(overrides)). Driver intervened often — may indicate uncomfortable steering. Check if kpV is too high.")
     }
     if lines.isEmpty { lines.append("• Data looks healthy. No obvious tuning changes needed.") }
-    return lines.joined(separator: "\n")
+    tuningGuidance = lines.joined(separator: "\n")
   }
 }

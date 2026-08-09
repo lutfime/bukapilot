@@ -331,7 +331,6 @@ final class DriveSessionViewModel: ObservableObject {
     }
     do {
       let dict = try MsgpackDecoder.decodeMap(data)
-      AppLog.debug("rx ch=\(channel.rawValue) keys=\(dict.keys.sorted()) \(data.count)B")
       switch channel {
       case .visualisation:
         let frame = DriveFrameDecoder.decode(dict)
@@ -353,10 +352,15 @@ final class DriveSessionViewModel: ObservableObject {
         updateFPS()
       case .settings:
         settings = DeviceSettings.decode(dict)
-        // Cache the device IP for instant SSH reconnect on next app launch
-        // (no need to wait for BLE — SSH is independent of the BLE connection).
-        if let ip = settings.localIP, !ip.isEmpty {
-          DeviceService.cachedIP = ip
+        // Cache the device IP for instant SSH reconnect on next app launch.
+        // When hotspot is active, use the hotspot IP (wlan1) because wlan0
+        // won't have an IP — the device IS the access point.
+        // Cache the device IP per network type for instant SSH reconnect.
+        if settings.hotspotEnabled, let hip = settings.hotspotIp, !hip.isEmpty {
+          DeviceService.cacheIP(hip, forKey: "hotspot")
+        } else if let ip = settings.localIP, !ip.isEmpty {
+          let key = HotspotDetector.isOnDeviceHotspot ? "hotspot" : (HotspotDetector.currentSSID ?? "wifi")
+          DeviceService.cacheIP(ip, forKey: key)
         }
         // Once settings arrive we know the DongleId; ask for the visualisation
         // stream so the device starts pushing frames to us. Only request if we

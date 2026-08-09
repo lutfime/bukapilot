@@ -8,16 +8,17 @@ struct KommuDriveApp: App {
   var body: some Scene {
     WindowGroup {
       RootView(viewModel: session)
+        .onAppear {
+          HotspotDetector.shared.requestPermission()
+          HotspotDetector.refreshSSID()
+        }
         .onChange(of: scenePhase) { _, phase in
           switch phase {
           case .active:
+            HotspotDetector.refreshSSID()
             // App came back to foreground — try to restore the BLE connection.
-            // iOS drops BLE links shortly after backgrounding, so we need to
-            // reconnect or rescan every time the user returns.
             session.handleAppBecameActive()
           case .background, .inactive:
-            // App backgrounded — nothing to do; iOS will suspend us and drop
-            // the BLE link. The central delegate will fire didDisconnect.
             break
           @unknown default:
             break

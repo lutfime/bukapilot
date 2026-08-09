@@ -82,7 +82,7 @@ def _use_rknn_supercombo() -> bool:
     return False
   return SUPERCOMBO_RKNN_PATH.exists() and SUPERCOMBO_METADATA_PATH.exists()
 
-LAT_SMOOTH_SECONDS = 0.15  # smooth the RKNN model's noisy desired_curvature. PID-drive data (2026-08-06) proved the wobble is MODEL-driven (desired-angle noise 0.5-2.2 deg, kp-independent) -> smooth the model path, NOT the PID gains. 0.15 attenuates the ~3.5Hz model noise; go 0.2 if re-plot still shows wobble.
+LAT_SMOOTH_SECONDS = 0.2  # smooth the RKNN model's noisy desired_curvature. PID-drive data (2026-08-06) proved the wobble/stair-step is MODEL-driven (desired-angle noise 0.5-2.2 deg, kp-independent) -> smooth the model path, NOT the PID gains. 0.15 attenuated the ~3.5Hz model noise; bumped to 0.2 to further reduce the steering stair-step (big discrete angle jumps amplified by kp into ~14-unit CAN steps). Re-plot next drive; bump higher if steps still feel coarse.
 LONG_SMOOTH_SECONDS = 0.3
 MIN_LAT_CONTROL_SPEED = 0.3
 # When the 0.11 supercombo model (with action head) is active, use upstream 0.11's value (0.0).

@@ -53,7 +53,14 @@
 - → output is smooth but **laggy/floaty**: ramps late then overshoots. That's the "corners late" feel.
 - Regression `|output|` vs `(angle_des·vEgo²)` → effective gain ~3.2e-5 vs kf 6.5e-6 ≈ **5× headroom**.
 
-**Change applied:** kf `0.000006` → **`0.0000250`** on device line 85 (8-space indent preserved; backup `interface.py.bak-kf`). Goal: `f/OUT` 5% → ~15-25%, `i/OUT` drops toward ~60%. **Pending road test.**
+**Change applied:** kf `0.000006` → **`0.0000250`** on device line 85 (8-space indent preserved; backup `interface.py.bak-kf`). Goal: `f/OUT` 5% → ~15-25%, `i/OUT` drops toward ~60%.
+
+**RESULT (measured 2026-08-09, post-kf drives 04-01-58 + 05-45-16, 8 full-rate rlog segs, `pid_analyze2.py`):**
+- `f/OUT`: 2–8% → **~21%** (median 20.7%, range 11–30%) → **target 15–25% ACHIEVED.** Late-steer gone (user-confirmed).
+- `i/OUT`: 82–95% → **~70%** (median, range 53–78%) → dropped toward ~60% but still the dominant term.
+- Per-seg f/OUT/i/OUT: 29.6/67 · 20.7/78 · 17.5/53 · 11.1/58 · 28.4/59 · 23.6/73 · 20.3/75 · 20.7/76.
+
+**kp verdict (the "should we restore the cut?" question):** the cut (commit `a11fb76`: kpV 0.06→0.045 @54km/h, 0.14→0.10 @90km/h) was to damp overshoot from kp × laggy integrator. With i/OUT still ~70% (not negligible), the cut is STILL doing useful damping → **leave kp as-is; do NOT fully restore.** f/OUT is in-target and the car feels good, so there's no complaint to fix by raising kp. If tighter mid-corner tracking is wanted specifically: half-restore (0.052/0.12), one drive, watch overshoot. Full 0.06/0.14 not justified while i/OUT ~70%.
 - Line 43 (`0.000071`) is the shared default for X50/S70 — leave it.
 
 **Levers ranked:** (1) raise kf — DONE; (2) D-term — PID supports `k_d`/`error_rate` but `latcontrol_pid` doesn't pass them (wired but unused; code change to enable); (3) LAT_SMOOTH — weaker than thought (desired-angle already quiet, p95 step 0.2-0.3°). Do NOT reduce kp (→ understeer).

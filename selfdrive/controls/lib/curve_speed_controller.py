@@ -35,6 +35,10 @@ TARGET_LEAD_TIME = 2.0        # s — reach target speed this far before the cur
 TARGET_RISE_RATE = 1.2        # m/s per cycle — how fast target rises back up after a curve
 TARGET_TRACKING_MARGIN = 1.0  # m/s — hysteresis so target doesn't hunt
 
+# Curve detection hysteresis (ported from FrogPilot) — prevents hunt on gentle curves
+CURVE_DETECTION_ENTER = 1.0   # m/s² — must exceed this to activate CSC
+CURVE_DETECTION_EXIT = 0.7    # m/s² — must drop below this to deactivate
+
 # Driver-learning calibration ("Auto" profile, copied from FrogPilot)
 CALIBRATION_PROGRESS_THRESHOLD = int(10 / DT_MDL)
 CALIBRATION_TARGET = CALIBRATION_PROGRESS_THRESHOLD * 50
@@ -63,6 +67,9 @@ def calculate_road_curvature(modelData, v_ego, lateral_budget):
   deceleration. Returns (curvature_at_worst_point, time_to_that_point, peak_curvature).
   """
   velocity = np.array(modelData.velocity.x)
+  # Guard: empty or degraded model output → no curvature, safe default.
+  if velocity.size == 0:
+    return 0.0, 0.0, 0.0
   curvature = np.array(modelData.orientationRate.z) / np.maximum(velocity, 1)
   moving_curvature = np.where(velocity >= MINIMUM_PLANNED_SPEED, np.abs(curvature), 0)
 
@@ -89,7 +96,12 @@ class CurveSpeedController:
 
     self.budget = DEFAULT_LATERAL_ACCELERATION
     self.lateral_acceleration = DEFAULT_LATERAL_ACCELERATION
-    self.max_limit = 0.0
+    # Sport profile learned limit — persisted across restarts (FrogPilot uses MaxLateralAcceleration).
+    try:
+      raw_ml = self.params.get("MapCornerMaxLimit")
+      self.max_limit = float(raw_ml) if raw_ml else 0.0
+    except (TypeError, ValueError):
+      self.max_limit = 0.0
 
     # learned data (Auto profile)
     self.curvature_data = self._load_curvature_data()
@@ -140,12 +152,15 @@ class CurveSpeedController:
           data = self.curvature_data[key]
           average = data["average"]
           count = data["count"]
+          # abs() is critical: curvature is signed, so lateral_acceleration is signed.
+          # Without abs(), left-hand curves (negative) would corrupt the running average.
+          latacc = abs(self.lateral_acceleration)
           self.curvature_data[key] = {
-            "average": ((average * count) + self.lateral_acceleration) / (count + 1),
+            "average": ((average * count) + latacc) / (count + 1),
             "count": min(count + 1, CALIBRATION_PROGRESS_THRESHOLD),
           }
         else:
-          self.curvature_data[key] = {"average": self.lateral_acceleration, "count": 1}
+          self.curvature_data[key] = {"average": abs(self.lateral_acceleration), "count": 1}
       else:
         self.enable_training = False
     elif self.training_timer >= 10.0:
@@ -153,6 +168,8 @@ class CurveSpeedController:
       progress = float(min(collected / CALIBRATION_TARGET, 1.0) * 100)
       self.params.put_nonblocking("CalibrationProgress", progress)
       self.params.put_nonblocking("CurvatureData", self.curvature_data)
+      # Persist the Sport max_limit so it survives restarts.
+      self.params.put_nonblocking("MapCornerMaxLimit", self.max_limit)
       self._update_lateral_acceleration()
       self.training_timer = 0
     else:
@@ -257,10 +274,23 @@ class CurveSpeedController:
     lead = sm["radarState"].leadOne
     self.tracking_lead = lead.status and lead.dRel < 40.0
 
+    # Hysteresis gate (ported from FrogPilot CURVE_DETECTION_ENTER/EXIT).
+    # Prevents CSC from hunting in/out on gentle curves and disables it when
+    # the turn signal is on (you're about to turn into a junction, not curve).
+    cs = sm["carState"]
+    blinkers_on = cs.leftBlinker or cs.rightBlinker
+    curve_latacc = v_ego ** 2 * self.road_curvature_peak
+    if not self.road_curvature_detected:
+      self.road_curvature_detected = curve_latacc > CURVE_DETECTION_ENTER
+    else:
+      self.road_curvature_detected = curve_latacc > CURVE_DETECTION_EXIT
+    self.road_curvature_detected &= v_ego > CRUISING_SPEED
+    self.road_curvature_detected &= not blinkers_on
+
     self.update_budget()
     self.update_max_limit(v_ego, sm)
 
-    if long_control_active and v_ego > CRUISING_SPEED and self.road_curvature > 1e-5:
+    if long_control_active and v_ego > CRUISING_SPEED and self.road_curvature_detected:
       self.update_target(v_ego)
       return min(v_cruise, self.target)
     else:

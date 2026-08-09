@@ -170,11 +170,11 @@ struct TuningSheet: View {
     }
   }
 
-  // MARK: Map corner slowdown
+  // MARK: Curve slowdown (CSC — model curvature based)
 
   private var mapCornerSection: some View {
     Section {
-      Toggle("Enable corner slowdown", isOn: $vm.mapDraftEnabled)
+      Toggle("Enable curve slowdown", isOn: $vm.mapDraftEnabled)
 
       // Profile picker (CSC)
       Picker("Profile", selection: $vm.mapDraftProfile) {
@@ -211,7 +211,7 @@ struct TuningSheet: View {
         } label: {
           HStack {
             Image(systemName: "checkmark.circle.fill")
-            Text("Save map corner settings")
+            Text("Save curve settings")
           }
         }
         .buttonStyle(.borderedProminent)
@@ -224,30 +224,10 @@ struct TuningSheet: View {
           .foregroundStyle(vm.mapSaveResult.contains("✓") ? .green : .red)
           .textSelection(.enabled)
       }
-
-      // Live status (read-only, reflects what mapd_kommu last published)
-      if let p = vm.mapParams {
-        HStack {
-          Circle()
-            .fill(p.valid ? Color.green : Color.gray.opacity(0.3))
-            .frame(width: 8, height: 8)
-          if p.valid {
-            Text("Active — advisory \(String(format: "%.0f km/h", p.vCorner * 3.6))")
-              .font(.system(size: 11))
-              .foregroundStyle(.secondary)
-          } else {
-            // Inactive has several causes; without more params we can't tell which from here.
-            // SSH and read the status file for the real reason (no params_keys rebuild needed).
-            Text("Inactive — run on-road with GPS lock. SSH: cat /tmp/mapd_kommu_status.txt")
-              .font(.system(size: 10))
-              .foregroundStyle(.tertiary)
-          }
-        }
-      }
     } header: {
-      Text("Map Corner Slowdown")
+      Text("Curve Slowdown")
     } footer: {
-      Text("Uses OpenStreetMap road geometry to slow the car for upcoming corners. Slowdown-only — can never accelerate. Requires device GPS + internet.")
+      Text("Uses the driving model's predicted road curvature to slow for upcoming corners. Slowdown-only — can never accelerate. No internet or GPS needed.")
     }
   }
 

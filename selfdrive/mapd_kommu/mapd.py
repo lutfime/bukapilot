@@ -227,6 +227,68 @@ class MapDKommu:
     with self._lock:
       update_proc()
 
+  def _write_status_file(self, now, v_corner, budget):
+    """Write a plain-text status file for SSH debugging (`cat /tmp/mapd_kommu_status.txt`).
+    Pure info — no params involved, so no params_keys rebuild needed."""
+    # Diagnose why we're (in)valid, in priority order.
+    if self.last_gps is None or self.last_gps_fix_timestamp == 0:
+      status = "no_gps"           # process running, but qcomgpsd hasn't produced a usable fix yet
+    elif self.location_stdev is not None and self.location_stdev > 25.0:
+      status = f"gps_poor_acc ({self.location_stdev:.0f}m)"
+    elif self.way_collection is None:
+      status = "osm_fetching"     # haven't fetched any roads yet (first cycle, or all endpoints failed)
+    elif self.last_fetch_location is None:
+      status = "osm_empty"        # fetch ran but returned 0 ways
+    elif self.route is None or not self.route.located:
+      status = "no_route_match"   # got roads but none matched our position + bearing
+    elif v_corner is None:
+      status = "no_corner"        # on a road, but no curvature sections ahead (straight road)
+    else:
+      status = "active"
+
+    road = ""
+    sections = 0
+    dist_to_corner = None
+    try:
+      if self.route is not None and self.route.located:
+        road = self.route.current_road_name or "(unnamed)"
+        secs = self.route.curvature_speed_limits_ahead
+        sections = len(secs)
+        if len(secs) > 0:
+          dist_to_corner = secs[0].start
+    except Exception:
+      pass
+
+    valid = (status == "active")
+    lines = [
+      f"status: {status}",
+      f"valid: {valid}",
+      f"v_corner_mps: {v_corner:.2f}" if v_corner is not None else "v_corner_mps: -",
+      f"v_corner_kmh: {v_corner * 3.6:.1f}" if v_corner is not None else "v_corner_kmh: -",
+      f"budget: {budget:.2f} m/s^2",
+      f"road: {road}" if road else "road: -",
+      f"sections_ahead: {sections}",
+      f"dist_to_first_corner_m: {dist_to_corner:.0f}" if dist_to_corner is not None else "dist_to_first_corner_m: -",
+      f"",
+      f"# GPS",
+      f"gps_fix_ts: {self.last_gps_fix_timestamp}",
+      f"location: {self.location_deg}" if self.location_deg else "location: -",
+      f"bearing_deg: {float(self.bearing_rad) * 180.0 / 3.14159:.0f}" if self.bearing_rad is not None else "bearing_deg: -",
+      f"accuracy_m: {self.location_stdev:.1f}" if self.location_stdev is not None else "accuracy_m: -",
+      f"gps_speed_mps: {self.gps_speed:.1f}",
+      f"",
+      f"# OSM fetch",
+      f"last_fetch_loc: {self.last_fetch_location}" if self.last_fetch_location is not None else "last_fetch_loc: -",
+      f"ways_fetched: {len(self.way_collection.way_relations)}" if self.way_collection is not None else "ways_fetched: 0",
+      f"",
+      f"# updated: {time.strftime('%H:%M:%S')} (1Hz cycle)",
+    ]
+    try:
+      with open("/tmp/mapd_kommu_status.txt", "w") as f:
+        f.write("\n".join(lines) + "\n")
+    except Exception:
+      pass  # never let status-file writing crash the control loop
+
   def publish_to_params(self):
     """Compute the corner speed and write it (plus validity) to Params."""
     budget = _read_budget(self.params)
@@ -243,6 +305,9 @@ class MapDKommu:
       # Hold the last valid value briefly (smooths 1 Hz GPS gaps), then invalidate.
       if now - self._last_valid_t > MAP_VALIDITY_TIMEOUT_S:
         self.params.put_bool_nonblocking("MapCornerValid", False)
+
+    # Human-readable status file for SSH debugging. No params involved — just `cat` it.
+    self._write_status_file(now, v_corner, budget)
 
 
 def mapd_thread(sm=None, pm=None):

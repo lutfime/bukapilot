@@ -227,11 +227,17 @@ struct TuningSheet: View {
           Circle()
             .fill(p.valid ? Color.green : Color.gray.opacity(0.3))
             .frame(width: 8, height: 8)
-          Text(p.valid
-               ? "Active — advisory \(String(format: "%.0f km/h", p.vCorner * 3.6))"
-               : "Inactive (no GPS fix or route)")
-            .font(.system(size: 11))
-            .foregroundStyle(.secondary)
+          if p.valid {
+            Text("Active — advisory \(String(format: "%.0f km/h", p.vCorner * 3.6))")
+              .font(.system(size: 11))
+              .foregroundStyle(.secondary)
+          } else {
+            // Inactive has several causes; without more params we can't tell which from here.
+            // SSH and read the status file for the real reason (no params_keys rebuild needed).
+            Text("Inactive — run on-road with GPS lock. SSH: cat /tmp/mapd_kommu_status.txt")
+              .font(.system(size: 10))
+              .foregroundStyle(.tertiary)
+          }
         }
       }
     } header: {

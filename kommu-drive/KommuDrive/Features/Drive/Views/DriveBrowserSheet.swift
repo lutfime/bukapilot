@@ -5,6 +5,13 @@ import SwiftUI
 struct DriveBrowserSheet: View {
   @ObservedObject var viewModel: DriveSessionViewModel
   @StateObject private var browserVM = DriveBrowserViewModel()
+  @State private var segment: DriveSegment = .drives
+
+  private enum DriveSegment: String, CaseIterable, Identifiable {
+    case drives = "Drives"
+    case mapCorner = "Map Corner"
+    var id: String { rawValue }
+  }
 
   private var hostLabel: String {
     DeviceService.hostLabel(ssid: viewModel.settings.activeWlanSSID)
@@ -15,54 +22,34 @@ struct DriveBrowserSheet: View {
 
   var body: some View {
     NavigationStack {
-      Group {
-        if !browserVM.isConnected && browserVM.routes.isEmpty {
-          connectingView
-        } else if let route = browserVM.selectedRoute {
-          if browserVM.isLoading {
-            VStack(spacing: 16) {
-              ProgressView(value: browserVM.progress)
-                .progressViewStyle(.linear)
-                .frame(maxWidth: 240)
-              Text(browserVM.progressText.isEmpty ? "Loading…" : browserVM.progressText)
-                .font(.system(size: 13))
-                .foregroundStyle(.secondary)
+      VStack(spacing: 0) {
+        // Segmented control — hidden when drilling into a specific drive's analysis.
+        if browserVM.selectedRoute == nil {
+          Picker("", selection: $segment) {
+            ForEach(DriveSegment.allCases) { seg in
+              Text(seg.rawValue).tag(seg)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-          } else if let chartVM = browserVM.chartsVM {
-            DriveChartsView(vm: chartVM)
-          } else if let err = browserVM.error {
-            VStack(spacing: 12) {
-              Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-              Text(err)
-                .font(.system(size: 12, design: .monospaced))
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .textSelection(.enabled)
-              Button("Copy error") {
-                UIPasteboard.general.string = err
-              }
-              .buttonStyle(.bordered)
-              .tint(.secondary)
-              Button("Back to drives") {
-                browserVM.selectedRoute = nil
-                browserVM.error = nil
-              }
-              .buttonStyle(.bordered)
-            }
-            .padding()
           }
-        } else {
-          routeListView
+          .pickerStyle(.segmented)
+          .padding(.horizontal)
+          .padding(.vertical, 8)
+        }
+
+        switch segment {
+        case .drives:
+          drivesContent
+        case .mapCorner:
+          MapdStatusView(viewModel: viewModel)
         }
       }
-      .navigationTitle(browserVM.selectedRoute == nil ? "Drives" : "Analysis")
+      .navigationTitle(navTitle)
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
         if browserVM.selectedRoute != nil {
           ToolbarItem(placement: .topBarLeading) {
             Button {
               browserVM.selectedRoute = nil
+              browserVM.error = nil
             } label: {
               Label("Drives", systemImage: "chevron.left")
             }
@@ -70,6 +57,54 @@ struct DriveBrowserSheet: View {
         }
       }
       .onAppear { connectWithRetry() }
+    }
+  }
+
+  private var navTitle: String {
+    if browserVM.selectedRoute != nil { return "Analysis" }
+    return segment == .drives ? "Drives" : "Map Corner"
+  }
+
+  @ViewBuilder
+  private var drivesContent: some View {
+    if !browserVM.isConnected && browserVM.routes.isEmpty {
+      connectingView
+    } else if browserVM.selectedRoute != nil {
+      if browserVM.isLoading {
+        VStack(spacing: 16) {
+          ProgressView(value: browserVM.progress)
+            .progressViewStyle(.linear)
+            .frame(maxWidth: 240)
+          Text(browserVM.progressText.isEmpty ? "Loading…" : browserVM.progressText)
+            .font(.system(size: 13))
+            .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+      } else if let chartVM = browserVM.chartsVM {
+        DriveChartsView(vm: chartVM)
+      } else if let err = browserVM.error {
+        VStack(spacing: 12) {
+          Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+          Text(err)
+            .font(.system(size: 12, design: .monospaced))
+            .foregroundStyle(.secondary)
+            .multilineTextAlignment(.center)
+            .textSelection(.enabled)
+          Button("Copy error") {
+            UIPasteboard.general.string = err
+          }
+          .buttonStyle(.bordered)
+          .tint(.secondary)
+          Button("Back to drives") {
+            browserVM.selectedRoute = nil
+            browserVM.error = nil
+          }
+          .buttonStyle(.bordered)
+        }
+        .padding()
+      }
+    } else {
+      routeListView
     }
   }
 

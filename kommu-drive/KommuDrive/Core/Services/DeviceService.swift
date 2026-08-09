@@ -544,6 +544,93 @@ print('__KD_OK__')
     }
   }
 
+  // MARK: - Map corner live status (SSH, no params involved)
+
+  /// Parsed mapd_kommu status from /tmp/mapd_kommu_status.txt.
+  /// All fields optional — only present if the file had them. `raw` is the full text for debugging.
+  struct MapdStatus: Equatable {
+    var status: String = ""       // active | no_gps | gps_poor_acc | osm_fetching | osm_empty | no_route_match | no_corner
+    var valid: Bool = false
+    var vCornerKmh: Double?       // km/h, friendlier than m/s for display
+    var budget: Double?
+    var road: String?
+    var sectionsAhead: Int?
+    var distToCorner: Double?     // meters
+    var location: String?
+    var bearing: Double?
+    var accuracy: Double?
+    var gpsSpeed: Double?
+    var waysFetched: Int?
+    var updated: String?
+    var raw: String = ""          // full file content
+  }
+
+  /// Reads /tmp/mapd_kommu_status.txt and parses it. Returns nil if SSH fails or file missing.
+  func fetchMapdStatus() async -> MapdStatus? {
+    do {
+      let out = try await execute("cat /tmp/mapd_kommu_status.txt 2>/dev/null")
+      if out.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        return MapdStatus(status: "no_status_file", raw: "")
+      }
+      return parseMapdStatus(out)
+    } catch {
+      AppLog.error("fetchMapdStatus failed: \(error)")
+      return nil
+    }
+  }
+
+  /// True if the mapd_kommu process is running on the device (independent of status file).
+  func isMapdRunning() async -> Bool {
+    do {
+      let out = try await execute("pgrep -f mapd_kommu | head -1")
+      return !out.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    } catch {
+      return false
+    }
+  }
+
+  private func parseMapdStatus(_ raw: String) -> MapdStatus {
+    var s = MapdStatus()
+    s.raw = raw
+    // The file is "key: value" lines; values may have units/labels after the number.
+    func val(_ key: String) -> String? {
+      for line in raw.split(separator: "\n") {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        if trimmed.hasPrefix(key + ":") {
+          var v = String(trimmed.dropFirst(key.count + 1)).trimmingCharacters(in: .whitespaces)
+          if v == "-" { return nil }
+          return v
+        }
+      }
+      return nil
+    }
+    func doub(_ key: String) -> Double? {
+      guard let v = val(key) else { return nil }
+      // take the leading numeric part (e.g. "45.0 km/h" → 45.0, "(32 m)" → nil)
+      let num = v.split(whereSeparator: { !($0.isNumber || $0 == "." || $0 == "-") }).first
+      return num.flatMap { Double($0) }
+    }
+    func inty(_ key: String) -> Int? {
+      guard let v = val(key) else { return nil }
+      let num = v.split(whereSeparator: { !($0.isNumber || $0 == "-") }).first
+      return num.flatMap { Int($0) }
+    }
+    s.status = val("status") ?? ""
+    s.valid = val("valid") == "True" || val("valid") == "true" || val("valid") == "1"
+    s.vCornerKmh = doub("v_corner_kmh")
+    s.budget = doub("budget")
+    s.road = val("road")
+    s.sectionsAhead = inty("sections_ahead")
+    s.distToCorner = doub("dist_to_first_corner_m")
+    s.location = val("location")
+    s.bearing = doub("bearing_deg")
+    s.accuracy = doub("accuracy_m")
+    s.gpsSpeed = doub("gps_speed_mps")
+    s.waysFetched = inty("ways_fetched")
+    s.updated = val("updated")
+    return s
+  }
+
   // MARK: - Route browsing
 
   /// A drive: the base route name (without segment number) + how many segments.

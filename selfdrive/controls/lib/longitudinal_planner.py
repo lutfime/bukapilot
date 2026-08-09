@@ -153,7 +153,7 @@ class LongitudinalPlanner:
     # MapCornerEnabled (that toggle is mapd-only, opt-in). So CSC=on + mapd=off is the default.
     # Aggressiveness is set via MapCornerProfile; flip CSCEnabled off to fully disable.
     if (self.CP.openpilotLongitudinalControl
-            and self.params.get_bool("CSCEnabled", True)):
+            and self.params.get_bool("CSCEnabled")):
       v_cruise = self.csc.update(sm, v_ego, v_cruise)
     # ===== END CSC =====
 

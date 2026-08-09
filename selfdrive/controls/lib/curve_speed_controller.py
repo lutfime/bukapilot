@@ -111,6 +111,7 @@ class CurveSpeedController:
     self.road_curvature = 0.0
     self.time_to_curve = 0.0
     self.road_curvature_peak = 0.0
+    self.road_curvature_detected = False
     self.driving_in_curve = False
     self.tracking_lead = False
     self.target = 0.0

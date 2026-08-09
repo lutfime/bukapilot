@@ -67,13 +67,17 @@ def calculate_road_curvature(modelData, v_ego, lateral_budget):
   deceleration. Returns (curvature_at_worst_point, time_to_that_point, peak_curvature).
   """
   velocity = np.array(modelData.velocity.x)
+  yaw_rate = np.array(modelData.orientationRate.z)
+  time_to = np.array(modelData.orientationRate.t)
   # Guard: empty or degraded model output → no curvature, safe default.
-  if velocity.size == 0:
+  if velocity.size == 0 or yaw_rate.size == 0 or time_to.size == 0:
     return 0.0, 0.0, 0.0
-  curvature = np.array(modelData.orientationRate.z) / np.maximum(velocity, 1)
+  if not (velocity.size == yaw_rate.size == time_to.size):
+    return 0.0, 0.0, 0.0
+  curvature = yaw_rate / np.maximum(velocity, 1)
   moving_curvature = np.where(velocity >= MINIMUM_PLANNED_SPEED, np.abs(curvature), 0)
 
-  time_to_point = np.maximum(np.array(modelData.orientationRate.t), 1)
+  time_to_point = np.maximum(time_to, 1)
   required_decelerations = (v_ego - np.sqrt(lateral_budget / np.maximum(moving_curvature, 1e-6))) / time_to_point
 
   if lateral_budget > 0 and np.any(required_decelerations > 0):
@@ -95,7 +99,8 @@ class CurveSpeedController:
     self.training_timer = 0
 
     self.budget = DEFAULT_LATERAL_ACCELERATION
-    self.lateral_acceleration = DEFAULT_LATERAL_ACCELERATION
+    self.lateral_acceleration = DEFAULT_LATERAL_ACCELERATION       # LIVE latacc (per-cycle)
+    self.learned_lateral_acceleration = DEFAULT_LATERAL_ACCELERATION  # LEARNED (Auto profile budget)
     # Sport profile learned limit — persisted across restarts (FrogPilot uses MaxLateralAcceleration).
     try:
       raw_ml = self.params.get("MapCornerMaxLimit")
@@ -177,13 +182,13 @@ class CurveSpeedController:
       self.training_timer = 0
 
   def _update_lateral_acceleration(self):
-    """Set self.lateral_acceleration from the learned data (90th percentile), or default."""
+    """Set self.learned_lateral_acceleration from the learned data (90th percentile), or default."""
     if self.curvature_data:
       all_samples = [data["average"] for data in self.curvature_data.values()]
       all_counts = [data["count"] for data in self.curvature_data.values()]
-      self.lateral_acceleration = float(np.percentile(np.repeat(all_samples, all_counts), PERCENTILE))
+      self.learned_lateral_acceleration = float(np.percentile(np.repeat(all_samples, all_counts), PERCENTILE))
     else:
-      self.lateral_acceleration = DEFAULT_LATERAL_ACCELERATION
+      self.learned_lateral_acceleration = DEFAULT_LATERAL_ACCELERATION
 
   # ---- Sport self-tuning (update_max_limit) — ported from FrogPilot ----
 
@@ -227,7 +232,7 @@ class CurveSpeedController:
   def update_budget(self):
     """Pick the lateral-accel budget based on the active profile."""
     profile = self._read_profile()
-    lat = self.lateral_acceleration  # default: learned value (or DEFAULT if nothing learned)
+    lat = self.learned_lateral_acceleration  # AUTO profile: learned comfort value
 
     if profile == GENTLE:
       lat = GENTLE_LATERAL_ACCELERATION
@@ -235,7 +240,6 @@ class CurveSpeedController:
       lat = DEFAULT_LATERAL_ACCELERATION
     elif profile == SPORT and self.max_limit > 0:
       lat = self.max_limit
-    # AUTO: use the learned self.lateral_acceleration directly
 
     if self.max_limit > 0:
       lat = min(lat, self.max_limit)

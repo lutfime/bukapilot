@@ -187,3 +187,23 @@ Reminder: **planner vars = WHEN/HOW-MUCH to slow; PI gains = HOW SMOOTHLY the ca
 
 **Test plan:** (1) offline math `tools-local/test_map_corner.py`; (2) process starts on-road; (3) params round-trip (the gate); (4) dry-run drive (feature off, log `vCruiseMapCorner`); (5) live test on known corner (LOW traffic). Keep default off; disable immediately if odd braking.
 
+---
+
+# Curve Speed Controller (CSC, FrogPilot port) — now the DEFAULT corner-slowdown (2026-08-09)
+
+**CSC = model-curvature based** (`modelV2.orientationRate.z / velocity.x` → `v = sqrt(budget/curvature)`), clamps `v_cruise` via `min()`. 4 profiles (MapCornerProfile): Gentle=1.5, **Standard=2.0 (default)**, Sport=self-tuning (MapCornerMaxLimit), Auto=learns (CurvatureData/CalibrationProgress). Pure Python (numpy). Look-ahead via the model trajectory (`time_to_point`).
+
+**Decoupled from mapd (the bug + fix):** CSC was originally gated by `MapCornerEnabled` (shared with mapd), so disabling mapd also killed CSC. Fixed: CSC now gated by its own `CSCEnabled` (default ON, BOOL key added → params_pyx.so rebuilt, 10 keys total). mapd stays opt-in via `MapCornerEnabled` (default off). **Default state: CSC on (Standard), mapd off.** iOS "Curve Slowdown" toggle rewired to CSCEnabled (was MapCornerEnabled).
+
+**CSC vs mapd replay (10-30-57 drive, `result/` replay scripts):**
+| Corner | Real | CSC (model) | mapd (OSM) |
+|---|---|---|---|
+| C4 3.10022,101.70833 (normal) | ~30 km/h (per driver) | **34 km/h** ✓ | 14 km/h ✗ (phantom — no sharp OSM node within 60m; spline artifact) |
+| C1 3.09976,101.70475 (sharp, U-turn ahead) | ~14 | **15 km/h** ✓ | 14 km/h ✓ (agrees) |
+
+- **CSC is more accurate** on normal corners (C4: 34 vs phantom 14) and matches mapd on real sharp ones (C1). Earlier model-latacc analysis missed C4 (latacc=v²×r too small at low speed) — CSC uses curvature (yawrate/speed), which catches it.
+- **CSC looks ahead**: first flags C4 at ~16s/56m out (advisory ramps 52→34 km/h). Resolves the "does it show forward data" concern — yes, via the model trajectory (~10s horizon).
+- Advisory is somewhat noisy as the model updates (C4 bounced 68→34→50); fine in practice — planner takes `min()`, MPC smooths the decel.
+- **Verdict:** model-based CSC is the reliable primary; OSM-based mapd is unreliable (phantom corners from junction/spline artifacts) → disabled by default. On-road validation still pending (offroad during install).
+
+

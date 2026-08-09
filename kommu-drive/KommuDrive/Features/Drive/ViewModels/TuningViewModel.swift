@@ -13,7 +13,6 @@ final class TuningViewModel: ObservableObject {
   // Map corner slowdown state
   @Published var mapParams: DeviceService.MapCornerParams?
   @Published var mapDraftEnabled = false
-  @Published var mapDraftBudget: Double = 2.5
   @Published var mapDraftProfile: Int = 1  // 0=Gentle 1=Standard 2=Sport 3=Auto
   @Published var mapSaveResult: String = ""
 
@@ -100,7 +99,6 @@ final class TuningViewModel: ObservableObject {
       self.mapParams = p
       if let p = p {
         self.mapDraftEnabled = p.enabled
-        self.mapDraftBudget = p.budget
         self.mapDraftProfile = p.profile
       }
     }
@@ -108,9 +106,7 @@ final class TuningViewModel: ObservableObject {
 
   var mapHasChanges: Bool {
     guard let p = mapParams else { return false }
-    return mapDraftEnabled != p.enabled
-      || abs(mapDraftBudget - p.budget) > 0.01
-      || mapDraftProfile != p.profile
+    return mapDraftEnabled != p.enabled || mapDraftProfile != p.profile
   }
 
   func saveMapParams() {
@@ -129,12 +125,6 @@ final class TuningViewModel: ObservableObject {
         let v = String(mapDraftProfile)
         let r = await service.saveMapCornerParam(key: "MapCornerProfile", value: v)
         results.append(r.ok ? "✓ Profile = \(profileName(mapDraftProfile))" : "✗ Profile: \(r.detail)")
-        if !r.ok { hadError = true }
-      }
-      if let p = mapParams, abs(mapDraftBudget - p.budget) > 0.01, !hadError {
-        let v = String(format: "%.1f", mapDraftBudget)
-        let r = await service.saveMapCornerParam(key: "MapCornerBudget", value: v)
-        results.append(r.ok ? "✓ Budget = \(v) m/s²" : "✗ Budget: \(r.detail)")
         if !r.ok { hadError = true }
       }
       await MainActor.run { self.mapSaveResult = results.joined(separator: "\n") }

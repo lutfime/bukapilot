@@ -56,6 +56,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"MapCornerProfile", {PERSISTENT, INT, "1"}},            // 0=Gentle 1=Standard 2=Sport 3=Auto
     {"CurvatureData", {PERSISTENT, JSON, "{}"}},             // learned curvature→latacc map (Auto profile)
     {"CalibrationProgress", {PERSISTENT, FLOAT, "0"}},       // Auto profile learning progress %
+    {"MapCornerMaxLimit", {PERSISTENT, FLOAT, "0"}},         // Sport profile learned steering-saturation limit
     {"DoReboot", {CLEAR_ON_MANAGER_START, BOOL}},
     {"DoShutdown", {CLEAR_ON_MANAGER_START, BOOL}},
     {"DoUninstall", {CLEAR_ON_MANAGER_START, BOOL}},

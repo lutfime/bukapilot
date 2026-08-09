@@ -138,7 +138,15 @@ struct MapdStatusView: View {
       if let ways = s.waysFetched {
         Divider().padding(.vertical, 4)
         sectionLabel("OSM")
-        row("Roads fetched", value: "\(ways)")
+        row("State", value: osmStateLabel(s.osmState))
+        row("Roads loaded", value: "\(ways)")
+      }
+
+      if s.cacheCells != nil || s.cacheSizeMb != nil {
+        Divider().padding(.vertical, 4)
+        sectionLabel("CACHE")
+        if let c = s.cacheCells { row("Cells", value: "\(c)") }
+        if let mb = s.cacheSizeMb { row("Size", value: "\(String(format: "%.1f", mb)) / 100 MB") }
       }
 
       if let upd = s.updated {
@@ -155,6 +163,17 @@ struct MapdStatusView: View {
       .font(.system(size: 10, weight: .bold))
       .foregroundStyle(.tertiary)
       .tracking(0.5)
+  }
+
+  private func osmStateLabel(_ state: String?) -> String {
+    switch state ?? "" {
+    case "ready_cached": return "Ready (from cache)"
+    case "ready_fetched": return "Ready (fresh download)"
+    case "downloading": return "Downloading…"
+    case "failed": return "Download failed"
+    case "not_started": return "Not started"
+    default: return "—"
+    }
   }
 
   private func row(_ label: String, value: String) -> some View {

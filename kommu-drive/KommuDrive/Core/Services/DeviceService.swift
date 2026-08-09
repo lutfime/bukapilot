@@ -558,6 +558,9 @@ print('__KD_OK__')
     var accuracy: Double?
     var gpsSpeed: Double?
     var waysFetched: Int?
+    var osmState: String?         // not_started | downloading | ready_cached | ready_fetched | failed
+    var cacheCells: Int?
+    var cacheSizeMb: Double?      // the numeric part of "12.3 / 100 (12%)"
     var updated: String?
     var raw: String = ""          // full file content
   }
@@ -624,6 +627,9 @@ print('__KD_OK__')
     s.accuracy = doub("accuracy_m")
     s.gpsSpeed = doub("gps_speed_mps")
     s.waysFetched = inty("ways_fetched")
+    s.osmState = val("osm_state")
+    s.cacheCells = inty("cells")
+    s.cacheSizeMb = doub("size_mb")
     s.updated = val("updated")
     return s
   }

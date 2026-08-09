@@ -28,6 +28,7 @@ from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
 
 from openpilot.selfdrive.mapd_kommu.lib.osm import OSM
+from openpilot.selfdrive.mapd_kommu.lib import osm_cache
 from openpilot.selfdrive.mapd_kommu.lib.geo import distance_to_points
 from openpilot.selfdrive.mapd_kommu.lib.WayCollection import WayCollection
 from openpilot.selfdrive.mapd_kommu.config import (
@@ -47,6 +48,21 @@ def excepthook(args):
 
 
 threading.excepthook = excepthook
+
+
+def _cache_stats_lines():
+  """Return status lines describing the disk cache (tile count, size, cap). Best-effort."""
+  try:
+    count, size = osm_cache.cache_stats()
+    size_mb = size / (1024 * 1024)
+    cap_mb = osm_cache.MAX_BYTES / (1024 * 1024)
+    pct = (size / osm_cache.MAX_BYTES * 100.0) if osm_cache.MAX_BYTES > 0 else 0
+    return [
+      f"cells: {count}",
+      f"size_mb: {size_mb:.1f} / {cap_mb:.0f} ({pct:.0f}%)",
+    ]
+  except Exception:
+    return ["cells: -", "size_mb: -"]
 
 
 def _read_budget(params):
@@ -118,6 +134,9 @@ class MapDKommu:
     self._lock = threading.RLock()
     # Last published values (so we can publish invalid on timeout)
     self._last_valid_t = 0.0
+    # OSM fetch state for status display: 'not_started' | 'downloading' | 'ready_cached' | 'ready_fetched' | 'failed'
+    self._osm_state = "not_started"
+    self._last_fetch_t = 0.0
 
   def update_state(self, sm):
     sock = 'selfdriveState'
@@ -154,6 +173,30 @@ class MapDKommu:
     def query(osm, location_deg, location_rad, radius):
       cloudlog.info(f"mapd_kommu: OSM query at {location_deg} r={radius}m")
       lat, lon = location_deg
+
+      # 1. Try the disk cache first — instant, no network.
+      cached = osm_cache.get_cached(lat, lon)
+      if cached is not None and len(cached) > 0:
+        with self._lock:
+          self.way_collection = WayCollection(cached, location_rad)
+          self.last_fetch_location = location_rad
+          self._osm_state = "ready_cached"
+        cloudlog.info(f"mapd_kommu: cache hit ({len(cached)} ways) at {location_deg}")
+        # Refresh in the background (non-blocking): re-fetch to catch OSM edits.
+        try:
+          fresh = osm.fetch_road_ways_around_location(lat, lon, radius)
+          if len(fresh) > 0:
+            osm_cache.put(lat, lon, fresh)
+            with self._lock:
+              self.way_collection = WayCollection(fresh, location_rad)
+              self._osm_state = "ready_cached"
+        except Exception as e:
+          cloudlog.info(f"mapd_kommu: background refresh failed (using cache): {e}")
+        return
+
+      # 2. Cache miss → live Overpass fetch.
+      with self._lock:
+        self._osm_state = "downloading"
       try:
         ways = osm.fetch_road_ways_around_location(lat, lon, radius)
       except Exception as e:
@@ -161,12 +204,16 @@ class MapDKommu:
         ways = []
 
       if len(ways) > 0:
-        new_way_collection = WayCollection(ways, location_rad)
+        osm_cache.put(lat, lon, ways)  # persist for next startup
         with self._lock:
-          self.way_collection = new_way_collection
+          self.way_collection = WayCollection(ways, location_rad)
           self.last_fetch_location = location_rad
-          cloudlog.info(f"mapd_kommu: got {len(ways)} ways at {location_deg}")
+          self._osm_state = "ready_fetched"
+          self._last_fetch_t = time.monotonic()
+        cloudlog.info(f"mapd_kommu: got {len(ways)} ways at {location_deg}")
       else:
+        with self._lock:
+          self._osm_state = "failed"
         cloudlog.info("mapd_kommu: OSM query returned no ways (connectivity or empty area)")
 
     if self._query_thread is not None and self._query_thread.is_alive():
@@ -277,9 +324,13 @@ class MapDKommu:
       f"accuracy_m: {self.location_stdev:.1f}" if self.location_stdev is not None else "accuracy_m: -",
       f"gps_speed_mps: {self.gps_speed:.1f}",
       f"",
-      f"# OSM fetch",
+      f"# OSM",
+      f"osm_state: {self._osm_state}",
       f"last_fetch_loc: {self.last_fetch_location}" if self.last_fetch_location is not None else "last_fetch_loc: -",
       f"ways_fetched: {len(self.way_collection.way_relations)}" if self.way_collection is not None else "ways_fetched: 0",
+      f"",
+      f"# Cache",
+      *_cache_stats_lines(),
       f"",
       f"# updated: {time.strftime('%H:%M:%S')} (1Hz cycle)",
     ]

@@ -5,13 +5,16 @@ from openpilot.common.swaglog import cloudlog
 import overpy
 
 
-# Public Overpass endpoints. We try them in order — public endpoints are often rate-limited
-# or overloaded, so fallback matters. On the device this runs over LTE; queries are infrequent
-# (~1 per km of driving thanks to tile caching in mapd.py), so rate limits are rarely hit.
+# Public Overpass endpoints. We try them in order — mapd sticks with the last one that
+# succeeded, so the FIRST entry is the default. Order = fastest first (measured 2026-08-09
+# over the device's LTE): overpass-api.de ~1.4s, z mirror ~1.3s, kumi ~10s. kumi is kept as a
+# last-resort fallback (it works, just slowly); leading with it stalled mapd ~10s per query.
+# Queries are infrequent (~1 per km of driving thanks to tile caching in mapd.py), so the
+# official endpoints' rate limits are rarely hit; a 429 fails over to the next entry instantly.
 _OVERPASS_ENDPOINTS = [
-  'https://overpass.kumi.systems/api/interpreter',   # reliable, good global coverage
-  'https://overpass-api.de/api/interpreter',          # official main
-  'https://z.overpass-api.de/api/interpreter',        # official mirror
+  'https://overpass-api.de/api/interpreter',          # official main — fast, reliable
+  'https://z.overpass-api.de/api/interpreter',        # official mirror — fast
+  'https://overpass.kumi.systems/api/interpreter',    # kumi mirror — slow (~10s); last resort
 ]
 
 

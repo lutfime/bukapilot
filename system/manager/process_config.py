@@ -55,6 +55,11 @@ def always_run(started: bool, params: Params, CP: car.CarParams) -> bool:
 def only_onroad(started: bool, params: Params, CP: car.CarParams) -> bool:
   return started
 
+def only_onroad_mapd(started: bool, params: Params, CP: car.CarParams) -> bool:
+  # mapd_kommu only runs when: on-road AND the toggle is on. Avoids burning LTE/CPU
+  # downloading OSM data when the map-based corner slowdown is disabled (CSC alone is used).
+  return started and params.get_bool("MapCornerEnabled")
+
 def only_offroad(started: bool, params: Params, CP: car.CarParams) -> bool:
   return not started
 
@@ -100,7 +105,8 @@ procs = [
   PythonProcess("qcomgpsd", "system.qcomgpsd.qcomgpsd", qcomgps, enabled=(TICI or KA2)),
   # Map-aware corner slowdown (Kommu). Reads gpsLocation, queries OSM Overpass,
   # writes vCruiseMapCorner/MapCornerValid for the longitudinal planner. KA2-only.
-  PythonProcess("mapd_kommu", "selfdrive.mapd_kommu.mapd", only_onroad, enabled=KA2),
+  # Only runs when MapCornerEnabled is true — saves LTE/CPU when using CSC alone.
+  PythonProcess("mapd_kommu", "selfdrive.mapd_kommu.mapd", only_onroad_mapd, enabled=KA2),
   PythonProcess("pandad", "selfdrive.pandad.pandad", always_run),
   PythonProcess("paramsd", "selfdrive.locationd.paramsd", only_onroad),
   PythonProcess("lagd", "selfdrive.locationd.lagd", only_onroad),

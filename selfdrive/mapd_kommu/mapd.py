@@ -234,7 +234,9 @@ class MapDKommu:
 
     now = time.monotonic()
     if v_corner is not None and self.route is not None and self.route.located:
-      self.params.put_nonblocking("vCruiseMapCorner", f"{v_corner:.2f}")
+      # vCruiseMapCorner is declared FLOAT: params' strict cast table requires a native float
+      # (PYTHON_2_CPP has (float, FLOAT) but NOT (str, FLOAT)); a formatted str raises TypeError.
+      self.params.put_nonblocking("vCruiseMapCorner", float(v_corner))
       self.params.put_bool_nonblocking("MapCornerValid", True)
       self._last_valid_t = now
     else:

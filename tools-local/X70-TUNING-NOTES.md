@@ -1,8 +1,9 @@
 # X70 PID Lateral Tuning Notes
 
-## Current State (2026-08-08)
+## Current State (2026-08-09, branch `x70-map`)
 - **Controller:** PID (default; torque opt-in via toggle)
-- **LAT_SMOOTH_SECONDS:** 0.15 (0.10 model path) / 0.0 (0.11 path)
+- **LAT_SMOOTH_SECONDS:** 0.2 (0.10 model path; raised 0.15→0.2 on 2026-08-09 to reduce stair-step) / 0.0 (0.11 path)
+- **Experimental mode:** follows UI toggle (CEM override disabled — comma-style, always-on when toggle is on; see § "Experimental/CEM")
 - **kpV:** [0.0005, 0.02, 0.045, 0.10, 0.17] at [0, 5, 15, 25, 35] m/s
 - **kiV:** [0.001, 0.01, 0.09, 0.4, 0.5]
 - **kf:** 0.0000250 (raised from 0.000006 on 2026-08-09; see § "Lateral kf" below)
@@ -146,3 +147,34 @@ Reminder: **planner vars = WHEN/HOW-MUCH to slow; PI gains = HOW SMOOTHLY the ca
 2. If still aggressive: lower `A_CRUISE_MAX` + small `kp`/`ki` softening.
 3. If lead over-braking persists: nudge `LEAD_DANGER_FACTOR` / `DANGER_VREL` (careful — firm).
 4. True anticipation/smoothness: MPC weights `J_EGO_COST`/`A_CHANGE_COST` — **runtime edit, no rebuild** (try after relaxed personality).
+
+---
+
+# Experimental/CEM — toggle-respecting (2026-08-09)
+
+`conditional_experimental_mode.py` is Kommu-only. Upstream comma: experimental = pure UI toggle (`selfdrived.py:566` reads `ExperimentalMode` param). Kommu's CEM *overwrote* that param based on personality/curvature/slow-lead/model-stopping — and **aggressive personality gated it OFF**, which blocked corner-slowing.
+
+**Change (committed via merge c0a56a4, present on x70-map):** the final `self.params.put_bool("ExperimentalMode", should_enable)` override is **commented out** (lines 121-124), and `self.cem_enabled` is forced `False` (line 30). Net effect: **experimental mode follows the UI toggle only** (comma-style). CEM's detection logic still computes but no longer writes the param. `self.cem` wiring in controlsd.py is untouched (per user: minimal edit, don't remove the var).
+
+---
+
+# Map-Corner Slowdown (x70-map, NEW — handoff from other agent)
+
+**Branch:** `x70-map`, commit `e2dd6ba`. Ported from KisaPilot/sunnypilot mapd (pfeiferj, MIT). **INSTALLED on device 2026-08-09** (staging-x70fix overlay): files deployed, deps installed, params_pyx.so rebuilt, `mapd_kommu` registered + manager boots clean, feature OFF by default. **On-road test (Test 2/5) still pending** (device was offroad/home wifi during install).
+
+**What it does:** new process `mapd_kommu` reads GPS (1 Hz), fetches OSM road geometry (Overpass, multi-endpoint fallback), matches position+heading to a road, computes upcoming curvature via spline → advisory corner speed `v = sqrt(budget/kappa)`. The longitudinal planner clamps `v_cruise = min(v_cruise, v_map)` before MPC → MPC plans a smooth decel. **Slowdown-only by `min()` construction** (can never accelerate). If GPS/OSM/match fails → `MapCornerValid=false` → planner ignores (identical to stock). Master enable **default off**.
+
+**Files (device side):** `selfdrive/mapd_kommu/` (10 files); `longitudinal_planner.py:~144` (the `min()` clamp, 16 lines); `system/manager/process_config.py:101-103` (KA2-only on-road process); `common/params_keys.h:47-51` (5 keys); `pyproject.toml` (+overpy, +scipy).
+**Tuning params:** `MapCornerEnabled` (off), `MapCornerBudget` (2.5 m/s²; lower=slower), `MapCornerLookahead` (200 m). Published: `vCruiseMapCorner`, `MapCornerValid`.
+
+**⚠️ DEVICE CONSTRAINT — param keys (RESOLVED 2026-08-09, see [[params-pyx-rebuild-constraint]]):** new param keys need `params_keys.h` + `params_pyx.so` rebuilt. The device **CAN** rebuild (scons+Cython+gcc present — earlier "can't rebuild" note was wrong). Verified procedure: backup `.so` → `rm prebuilt` → stub `panda/certs/{debug,release}.pub` (1024-bit RSA; fork lacks them, SConstruct parse fails) → `scons -j4 common/params_pyx.so` → verify round-trip → **`touch prebuilt`** (MUST restore or manager's boot `build.py` loops on scons failure → openpilot won't boot) → restart. Rollback = `cp params_pyx.so.stock back`.
+
+**BUGS found + fixed during install (commit a1413eb):** the device's params layer enforces STRICT typing (`PYTHON_2_CPP` cast table) — `(str,FLOAT)` and `(str,BOOL)` are absent → `TypeError`.
+- `mapd.py` wrote FLOAT `vCruiseMapCorner` as a format string → would crash mapd on publish. Fixed: `float(v_corner)`.
+- iOS `DeviceService.saveMapCornerParam` wrote all keys via `put(k, v)` str → BOOL/FLOAT writes fail silently. Fixed: dispatch by key (`put_bool` for enable, `float()` for budget/lookahead). **App needs rebuild+reinstall** for the slider to persist.
+- Deps: scipy drags a numpy upgrade (pyproject says `>=2.0` but device pinned to 1.26.4). Install `scipy==1.13.1 --no-deps` (numpy-1.x ABI, coexists with 1.26.4). venv root-owned → sudo; `/home` is 100M tmpfs → uv cache+TMPDIR on `/data`.
+
+**Install steps (handoff):** deploy files to `/data/openpilot` + mirror the 3 edited files to `/data/safe_staging/merged/` (overlay twin — see [[device-deploy-overlay-gotcha]]); `pip install overpy scipy` into `/usr/local/venv`; rebuild/bypass params keys; restart openpilot (`sudo systemctl restart kommu.service`); verify `mapd_kommu` in `ps aux` when on-road.
+
+**Test plan:** (1) offline math `tools-local/test_map_corner.py`; (2) process starts on-road; (3) params round-trip (the gate); (4) dry-run drive (feature off, log `vCruiseMapCorner`); (5) live test on known corner (LOW traffic). Keep default off; disable immediately if odd braking.
+

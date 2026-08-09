@@ -510,7 +510,8 @@ print('vcorner=' + g('vCruiseMapCorner', '0'))
   }
 
   /// Writes a single map-corner param. `key` is one of MapCornerEnabled / MapCornerBudget / MapCornerLookahead.
-  /// Values are written verbatim ("0"/"1" for bools, "2.5" for floats).
+  /// Values arrive as strings ("0"/"1" for the enable bool, "2.5"/"200" for floats), and are dispatched to the
+  /// correct typed Params call — the device's strict params cast table rejects a str for BOOL/FLOAT keys.
   func saveMapCornerParam(key: String, value: String) async -> (ok: Bool, detail: String) {
     // Both key and value are base64-encoded to avoid any shell-quoting issues.
     let script = """
@@ -518,7 +519,11 @@ import sys, base64; sys.path.insert(0, '/data/openpilot')
 from openpilot.common.params import Params
 k = base64.b64decode('__KEY__').decode()
 v = base64.b64decode('__VAL__').decode()
-Params().put(k, v)
+p = Params()
+if k == 'MapCornerEnabled':
+    p.put_bool(k, v.lower() in ('1', 'true'))
+else:
+    p.put(k, float(v))
 print('__KD_OK__')
 """
     let k64 = Data(key.utf8).base64EncodedString()

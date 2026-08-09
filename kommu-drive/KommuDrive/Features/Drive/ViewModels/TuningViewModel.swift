@@ -14,6 +14,7 @@ final class TuningViewModel: ObservableObject {
   @Published var mapParams: DeviceService.MapCornerParams?
   @Published var mapDraftEnabled = false
   @Published var mapDraftBudget: Double = 2.5
+  @Published var mapDraftProfile: Int = 1  // 0=Gentle 1=Standard 2=Sport 3=Auto
   @Published var mapSaveResult: String = ""
 
   private let service = DeviceService()
@@ -100,6 +101,7 @@ final class TuningViewModel: ObservableObject {
       if let p = p {
         self.mapDraftEnabled = p.enabled
         self.mapDraftBudget = p.budget
+        self.mapDraftProfile = p.profile
       }
     }
   }
@@ -108,6 +110,7 @@ final class TuningViewModel: ObservableObject {
     guard let p = mapParams else { return false }
     return mapDraftEnabled != p.enabled
       || abs(mapDraftBudget - p.budget) > 0.01
+      || mapDraftProfile != p.profile
   }
 
   func saveMapParams() {
@@ -122,6 +125,12 @@ final class TuningViewModel: ObservableObject {
         results.append(r.ok ? "✓ Enabled = \(v)" : "✗ Enabled: \(r.detail)")
         if !r.ok { hadError = true }
       }
+      if let p = mapParams, mapDraftProfile != p.profile, !hadError {
+        let v = String(mapDraftProfile)
+        let r = await service.saveMapCornerParam(key: "MapCornerProfile", value: v)
+        results.append(r.ok ? "✓ Profile = \(profileName(mapDraftProfile))" : "✗ Profile: \(r.detail)")
+        if !r.ok { hadError = true }
+      }
       if let p = mapParams, abs(mapDraftBudget - p.budget) > 0.01, !hadError {
         let v = String(format: "%.1f", mapDraftBudget)
         let r = await service.saveMapCornerParam(key: "MapCornerBudget", value: v)
@@ -130,6 +139,16 @@ final class TuningViewModel: ObservableObject {
       }
       await MainActor.run { self.mapSaveResult = results.joined(separator: "\n") }
       if !hadError { await fetchMapParams() }
+    }
+  }
+
+  private func profileName(_ p: Int) -> String {
+    switch p {
+    case 0: return "Gentle"
+    case 1: return "Standard"
+    case 2: return "Sport"
+    case 3: return "Auto"
+    default: return "?"
     }
   }
 

@@ -174,20 +174,35 @@ struct TuningSheet: View {
 
   private var mapCornerSection: some View {
     Section {
-      Toggle("Enable map corner slowdown", isOn: $vm.mapDraftEnabled)
+      Toggle("Enable corner slowdown", isOn: $vm.mapDraftEnabled)
 
-      VStack(alignment: .leading, spacing: 4) {
-        HStack {
-          Text("Corner aggressiveness")
-          Spacer()
-          Text(String(format: "%.1f m/s²", vm.mapDraftBudget))
-            .font(.system(size: 11, design: .monospaced))
-            .foregroundStyle(.secondary)
+      // Profile picker (CSC)
+      Picker("Profile", selection: $vm.mapDraftProfile) {
+        Text("Gentle").tag(0)
+        Text("Standard").tag(1)
+        Text("Sport").tag(2)
+        Text("Auto").tag(3)
+      }
+      .pickerStyle(.segmented)
+      Text(profileDescription(vm.mapDraftProfile))
+        .font(.system(size: 10))
+        .foregroundStyle(.tertiary)
+
+      // Budget slider (used by Gentle/Standard as override; Auto/Sport are self-tuning)
+      if vm.mapDraftProfile < 2 {
+        VStack(alignment: .leading, spacing: 4) {
+          HStack {
+            Text("Aggressiveness")
+            Spacer()
+            Text(String(format: "%.1f m/s²", vm.mapDraftBudget))
+              .font(.system(size: 11, design: .monospaced))
+              .foregroundStyle(.secondary)
+          }
+          Slider(value: $vm.mapDraftBudget, in: 1.0...4.0, step: 0.1)
+          Text(lowerBudgetLabel(vm.mapDraftBudget))
+            .font(.system(size: 10))
+            .foregroundStyle(.tertiary)
         }
-        Slider(value: $vm.mapDraftBudget, in: 1.0...4.0, step: 0.1)
-        Text(lowerBudgetLabel(vm.mapDraftBudget))
-          .font(.system(size: 10))
-          .foregroundStyle(.tertiary)
       }
 
       if vm.mapHasChanges {
@@ -243,6 +258,16 @@ struct TuningSheet: View {
     case ..<2.8: return "balanced (recommended)"
     case ..<3.5: return "spirited — mild scrub on tight corners"
     default: return "aggressive — rarely triggers"
+    }
+  }
+
+  private func profileDescription(_ p: Int) -> String {
+    switch p {
+    case 0: return "Fixed 1.5 m/s² — cautious, slows for most corners"
+    case 1: return "Fixed 2.0 m/s² — balanced (recommended)"
+    case 2: return "Self-tuning — grows toward the steering limit, backs off on saturation"
+    case 3: return "Learns your driving — adapts the budget from how you take corners"
+    default: return ""
     }
   }
 }

@@ -467,6 +467,7 @@ print('__KD_OK__')
   struct MapCornerParams: Equatable {
     var enabled: Bool
     var budget: Double      // m/s^2, 1.0–4.0
+    var profile: Int        // 0=Gentle 1=Standard 2=Sport 3=Auto
     var valid: Bool         // MapCornerValid (live state)
     var vCorner: Double     // m/s (live state, current advisory)
   }
@@ -482,6 +483,7 @@ def g(k, d=''):
     return v if isinstance(v, str) else (d if v is None else str(v))
 print('enabled=' + g('MapCornerEnabled', '0'))
 print('budget=' + g('MapCornerBudget', '2.5'))
+print('profile=' + g('MapCornerProfile', '1'))
 print('valid=' + g('MapCornerValid', '0'))
 print('vcorner=' + g('vCruiseMapCorner', '0'))
 """
@@ -497,6 +499,7 @@ print('vcorner=' + g('vCruiseMapCorner', '0'))
       return MapCornerParams(
         enabled: d["enabled"] == "1" || d["enabled"] == "True" || d["enabled"] == "true",
         budget: Double(d["budget"] ?? "2.5") ?? 2.5,
+        profile: Int(d["profile"] ?? "1") ?? 1,
         valid: d["valid"] == "1" || d["valid"] == "True" || d["valid"] == "true",
         vCorner: Double(d["vcorner"] ?? "0") ?? 0.0
       )

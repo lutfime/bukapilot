@@ -13,6 +13,7 @@ from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LongitudinalMpc
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS as T_IDXS_MPC
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_from_plan
+from openpilot.selfdrive.controls.lib.curve_speed_controller import CurveSpeedController
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
 from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
@@ -90,6 +91,7 @@ class LongitudinalPlanner:
     # TODO remove mpc modes when TR released
     self.mpc.mode = 'acc'
     self.fcw = False
+    self.csc = CurveSpeedController(CP)
     self.dt = dt
     self.allow_throttle = True
 
@@ -141,7 +143,17 @@ class LongitudinalPlanner:
     v_cruise = v_cruise_kph * CV.KPH_TO_MS
     v_cruise_initialized = sm['carState'].vCruise != V_CRUISE_UNSET
 
-    # ===== MAP CORNER SLOWDOWN (Kommu, slowdown-only) =====
+    # ===== CURVE SPEED CONTROLLER (FrogPilot port, model-curvature) =====
+    # Primary corner-speed source — uses the model's predicted curvature (orientationRate.z /
+    # velocity.x) to compute v = sqrt(budget/curvature) and clamps v_cruise down. More accurate
+    # than the map (no phantom corners), needs no internet/GPS. 4 profiles via MapCornerProfile.
+    # Slowdown-only by min() construction. Runs before the map clamp so the tightest wins.
+    if (self.CP.openpilotLongitudinalControl
+            and self.params.get_bool("MapCornerEnabled", False)):
+      v_cruise = self.csc.update(sm, v_ego, v_cruise)
+    # ===== END CSC =====
+
+    # ===== MAP CORNER SLOWDOWN (secondary, blind-corner fallback) =====
     # mapd_kommu publishes an advisory corner speed (vCruiseMapCorner) derived from OSM
     # road curvature. Clamp v_cruise down to it before the MPC sees it, so the MPC plans a
     # smooth decel to the lower target. min() guarantees this can ONLY slow the car down,

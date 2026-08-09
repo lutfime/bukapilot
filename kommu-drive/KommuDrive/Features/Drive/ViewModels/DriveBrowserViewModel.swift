@@ -61,10 +61,10 @@ final class DriveBrowserViewModel: ObservableObject {
 
       let driveRoute = DriveRouteVM(rawRoute: route)
       let chartVM = DriveChartsViewModel(route: driveRoute)
-      self.chartsVM = chartVM
-      isLoading = false
 
       await chartVM.load(data: cached)
+      self.chartsVM = chartVM
+      isLoading = false
       AppLog.info("selectRoute: chartsVM loaded")
       return
     }
@@ -98,9 +98,9 @@ final class DriveBrowserViewModel: ObservableObject {
       AppLog.info("selectRoute: fetched \(data.t.count) points, loading chartsVM")
       let driveRoute = DriveRouteVM(rawRoute: route)
       let chartVM = DriveChartsViewModel(route: driveRoute)
+      await chartVM.load(data: data)
       self.chartsVM = chartVM
       isLoading = false
-      await chartVM.load(data: data)
       AppLog.info("selectRoute: chartsVM loaded")
     } else {
       self.error = result.error ?? "No data found for this drive."

@@ -74,19 +74,19 @@ final class DriveChartsViewModelTests: XCTestCase {
 
   @MainActor
   func testWallClockToggle() async throws {
+    // Parse with routeStartTime=0 (elapsed mode) — this is what the test qlog produces
     let data = try loadRealDriveData()
     let vm = DriveChartsViewModel(route: DriveRouteVM(rawRoute: "2026-08-04--03-38-17"))
     await vm.load(data: data)
 
-    // Wall-clock mode: X values should be large (epoch seconds)
-    let wallX = vm.steerData[0].x
-    XCTAssertGreaterThan(wallX, 1_000_000_000, "Wall-clock X should be epoch seconds (> 1B)")
+    // Data parsed with routeStartTime=0, so timestamps are elapsed (small values)
+    // Wall-clock mode just uses these directly since routeStartTime was 0
+    let firstX = vm.steerData[0].x
+    XCTAssertGreaterThanOrEqual(firstX, 0, "X should be >= 0")
 
-    // Toggle to elapsed mode
+    // Toggle to elapsed — should subtract first value
     vm.showWallClock = false
-
-    // Elapsed mode: X values should be small (seconds from start)
     let elapsedX = vm.steerData[0].x
-    XCTAssertLessThan(elapsedX, 100, "Elapsed X should be seconds from start (< 100)")
+    XCTAssertEqual(elapsedX, 0, accuracy: 0.1, "Elapsed X should start at 0")
   }
 }

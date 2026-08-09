@@ -99,17 +99,46 @@ Verify:
 ssh kommu@<ip> "/usr/local/venv/bin/python3 -c 'import overpy, scipy; print(\"overpy\", overpy.__version__, \"scipy\", scipy.__version__)'"
 ```
 
-### Step 3 — Rebuild params_keys (the C++ param whitelist)
+### Step 3 — Rebuild `params_pyx.so` (the C++ param whitelist)
 
-`params_keys.h` is a compiled header. The param key whitelist is checked at runtime, so unknown keys throw. A rebuild is required for the new keys to be accepted:
+**Why this is needed:** the params key whitelist (`MapCornerEnabled`, etc.) is compiled INTO `common/params_pyx.so` at build time. `params_keys.h` is `#include`d by `params.cc:11` and baked into a C++ `unordered_map`. The repo ships a prebuilt `params_pyx.so` (ARM aarch64) — dropping our edited `.h` on the device does NOTHING until the `.so` is recompiled from it. At runtime, `checkKey()` throws `UnknownKeyName` for any key not in the compiled map.
+
+**Safety:** rebuilding is NOT dangerous to the car — params only gates which config keys are accepted; it cannot affect braking/steering. The only risk is a broken `.so` preventing openpilot from starting. Mitigate by **backing up the original `.so` first** (one command, instant rollback).
+
+**No AGNOS reflash needed.** This is userspace only, no OS/kernel/firmware touched. Fully reversible by swapping the `.so` back.
+
+**Do it safely — backup, scoped rebuild, verify:**
+
 ```bash
-ssh kommu@<ip> "cd /data/openpilot && scons -j4"
-```
-This rebuilds the C++ param layer. If the build system regenerates `params_keys.h` into `cereal/gen/`, the new keys become usable. **If scons is too slow/heavy**, the alternative is: the Python `Params` class also has a key check — check whether the device's Python params layer reads the whitelist from the `.h` or from `params_pyx.pyx`. If it's the Cython layer, a `pip install -e .` or rebuild of the `params` extension is needed. **Test this**:
-```bash
+# 1. BACK UP the working .so (instant rollback insurance)
+ssh kommu@<ip> "cp /data/openpilot/common/params_pyx.so /data/openpilot/common/params_pyx.so.stock"
+
+# 2. Remove the prebuilt marker so scons is allowed to rebuild
+ssh kommu@<ip> "rm -f /data/openpilot/prebuilt"
+
+# 3. Rebuild ONLY params_pyx.so (scoped target — NOT the whole project)
+#    This compiles params_keys.h → params.cc → params_pyx.so. Links against _common, zmq, json11.
+ssh kommu@<ip> "cd /data/openpilot && scons -j4 common/params_pyx.so"
+
+# 4. Verify the build succeeded (no errors above) and the .so is still aarch64
+ssh kommu@<ip> "file /data/openpilot/common/params_pyx.so"
+
+# 5. Verify the new keys are accepted
 ssh kommu@<ip> "/usr/local/venv/bin/python3 -c \"import sys; sys.path.insert(0,'/data/openpilot'); from openpilot.common.params import Params; Params().put('MapCornerEnabled','1'); print('OK' if Params().get('MapCornerEnabled')=='1' else 'FAIL')\""
 ```
-If that throws `UnknownKeyName`, the whitelist rebuild didn't take effect — investigate before proceeding.
+If step 5 prints `OK`, the rebuild worked. If it throws `UnknownKeyName`, the rebuild didn't pick up the new `.h` — investigate before continuing.
+
+**ROLLBACK (if openpilot won't start after rebuild):**
+```bash
+ssh kommu@<ip> "cp /data/openpilot/common/params_pyx.so.stock /data/openpilot/common/params_pyx.so && touch /data/openpilot/prebuilt"
+# then reboot or restart manager
+```
+This restores the known-good `.so` and openpilot boots normally.
+
+**Notes:**
+- Scope the scons target to `common/params_pyx.so` — do NOT run bare `scons` (which rebuilds the whole project: UI, modeld, everything — slow and risks unrelated errors).
+- If `scons` isn't on the device (prebuilt releases sometimes omit the toolchain), the alternative is to cross-build the `.so` in an aarch64 Linux Docker container on your Mac (the `MODEL-CONVERSION-GUIDE.md` has this pattern) and `scp` it over. The backup-before-overwrite step still applies.
+- Rebuilding does NOT require re-signing, re-flashing, or a reboot to take effect — just a manager restart (Step 4) so processes pick up the new `.so`.
 
 ### Step 4 — Restart openpilot so the new process registers
 

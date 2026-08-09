@@ -1,8 +1,17 @@
+import socket
 import numpy as np
 from openpilot.selfdrive.mapd_kommu.lib.geo import R
 from openpilot.common.swaglog import cloudlog
 
 import overpy
+
+# Per-attempt socket timeout + no retries. overpy calls urlopen() with no timeout and
+# retries on "Server load too high"/rate-limit (406) — observed stalling a single query
+# ~160 s (retry_timeout sleeps), during which mapd had no fresh road data. Capping each
+# endpoint attempt to ~12 s with max_retry_count=0 means worst case ~3 endpoints x 12 s
+# = 36 s before giving up, instead of minutes. Scoped (setdefaulttimeout only affects
+# NEW sockets created inside the query window; mapd's msgq sockets already exist).
+OSM_QUERY_TIMEOUT_S = 12.0
 
 
 # Public Overpass endpoints. We try them in order — mapd sticks with the last one that
@@ -28,7 +37,9 @@ def create_way(way_id, node_ids, from_way):
 
 class OSM():
   def __init__(self):
-    self._apis = [overpy.Overpass(url=url) for url in _OVERPASS_ENDPOINTS]
+    # max_retry_count=0: don't retry a rate-limited endpoint (the multi-endpoint fallback
+    # below handles it). Default overpy retries with ~60s sleeps → minute-long stalls.
+    self._apis = [overpy.Overpass(url=url, max_retry_count=0) for url in _OVERPASS_ENDPOINTS]
     self._last_good_idx = 0  # stick with the last endpoint that worked
 
   def fetch_road_ways_around_location(self, lat, lon, radius):
@@ -45,15 +56,20 @@ class OSM():
 
     # Try the last-good endpoint first, then the rest.
     order = [self._last_good_idx] + [i for i in range(len(self._apis)) if i != self._last_good_idx]
-    for idx in order:
-      try:
-        ways = self._apis[idx].query(q).ways
-        self._last_good_idx = idx
-        cloudlog.info(f"mapd_kommu: OSM query ok ({len(ways)} ways) via endpoint {idx}")
-        return ways
-      except Exception as e:
-        cloudlog.warning(f"mapd_kommu: OSM endpoint {idx} failed: {e}")
-        continue
+    _prev_timeout = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(OSM_QUERY_TIMEOUT_S)
+    try:
+      for idx in order:
+        try:
+          ways = self._apis[idx].query(q).ways
+          self._last_good_idx = idx
+          cloudlog.info(f"mapd_kommu: OSM query ok ({len(ways)} ways) via endpoint {idx}")
+          return ways
+        except Exception as e:
+          cloudlog.warning(f"mapd_kommu: OSM endpoint {idx} failed: {e}")
+          continue
 
-    cloudlog.warning("mapd_kommu: all OSM endpoints failed")
-    return []
+      cloudlog.warning("mapd_kommu: all OSM endpoints failed")
+      return []
+    finally:
+      socket.setdefaulttimeout(_prev_timeout)

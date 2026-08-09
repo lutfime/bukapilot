@@ -148,8 +148,10 @@ class LongitudinalPlanner:
     # velocity.x) to compute v = sqrt(budget/curvature) and clamps v_cruise down. More accurate
     # than the map (no phantom corners), needs no internet/GPS. 4 profiles via MapCornerProfile.
     # Slowdown-only by min() construction. Runs before the map clamp so the tightest wins.
-    if (self.CP.openpilotLongitudinalControl
-            and self.params.get_bool("MapCornerEnabled", False)):
+    # CSC is ON BY DEFAULT whenever OP controls longitudinal (model-based, safe, the primary
+    # corner-slowdown). Deliberately NOT gated by MapCornerEnabled (that toggle is mapd-only,
+    # opt-in). So CSC=on + mapd=off is the default. Aggressiveness is set via MapCornerProfile.
+    if self.CP.openpilotLongitudinalControl:
       v_cruise = self.csc.update(sm, v_ego, v_cruise)
     # ===== END CSC =====
 

@@ -190,17 +190,6 @@ struct TuningSheet: View {
           .foregroundStyle(.tertiary)
       }
 
-      VStack(alignment: .leading, spacing: 4) {
-        HStack {
-          Text("Lookahead")
-          Spacer()
-          Text(String(format: "%.0f m", vm.mapDraftLookahead))
-            .font(.system(size: 11, design: .monospaced))
-            .foregroundStyle(.secondary)
-        }
-        Slider(value: $vm.mapDraftLookahead, in: 100...400, step: 10)
-      }
-
       if vm.mapHasChanges {
         Button {
           vm.saveMapParams()

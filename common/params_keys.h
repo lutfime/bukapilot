@@ -46,6 +46,8 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     // ---- Map corner slowdown (Kommu, Proton X70) ----
     {"MapCornerEnabled", {PERSISTENT, BOOL, "0"}},
     {"MapCornerBudget", {PERSISTENT, FLOAT, "2.5"}},
+    // MapCornerLookahead kept in the allowlist for back-compat but is no longer used —
+    // the horizon is speed-based (LOOK_AHEAD_HORIZON_TIME). Leaving the key avoids a .so rebuild.
     {"MapCornerLookahead", {PERSISTENT, FLOAT, "200"}},
     {"vCruiseMapCorner", {CLEAR_ON_MANAGER_START, FLOAT, "0"}},
     {"MapCornerValid", {CLEAR_ON_MANAGER_START, BOOL, "0"}},

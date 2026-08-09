@@ -467,7 +467,6 @@ print('__KD_OK__')
   struct MapCornerParams: Equatable {
     var enabled: Bool
     var budget: Double      // m/s^2, 1.0–4.0
-    var lookahead: Double   // meters
     var valid: Bool         // MapCornerValid (live state)
     var vCorner: Double     // m/s (live state, current advisory)
   }
@@ -483,7 +482,6 @@ def g(k, d=''):
     return v if isinstance(v, str) else (d if v is None else str(v))
 print('enabled=' + g('MapCornerEnabled', '0'))
 print('budget=' + g('MapCornerBudget', '2.5'))
-print('lookahead=' + g('MapCornerLookahead', '200'))
 print('valid=' + g('MapCornerValid', '0'))
 print('vcorner=' + g('vCruiseMapCorner', '0'))
 """
@@ -499,7 +497,6 @@ print('vcorner=' + g('vCruiseMapCorner', '0'))
       return MapCornerParams(
         enabled: d["enabled"] == "1" || d["enabled"] == "True" || d["enabled"] == "true",
         budget: Double(d["budget"] ?? "2.5") ?? 2.5,
-        lookahead: Double(d["lookahead"] ?? "200") ?? 200.0,
         valid: d["valid"] == "1" || d["valid"] == "True" || d["valid"] == "true",
         vCorner: Double(d["vcorner"] ?? "0") ?? 0.0
       )
@@ -509,7 +506,7 @@ print('vcorner=' + g('vCruiseMapCorner', '0'))
     }
   }
 
-  /// Writes a single map-corner param. `key` is one of MapCornerEnabled / MapCornerBudget / MapCornerLookahead.
+  /// Writes a single map-corner param. `key` is one of MapCornerEnabled / MapCornerBudget.
   /// Values arrive as strings ("0"/"1" for the enable bool, "2.5"/"200" for floats), and are dispatched to the
   /// correct typed Params call — the device's strict params cast table rejects a str for BOOL/FLOAT keys.
   func saveMapCornerParam(key: String, value: String) async -> (ok: Bool, detail: String) {

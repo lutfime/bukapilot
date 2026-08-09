@@ -14,7 +14,6 @@ final class TuningViewModel: ObservableObject {
   @Published var mapParams: DeviceService.MapCornerParams?
   @Published var mapDraftEnabled = false
   @Published var mapDraftBudget: Double = 2.5
-  @Published var mapDraftLookahead: Double = 200
   @Published var mapSaveResult: String = ""
 
   private let service = DeviceService()
@@ -101,7 +100,6 @@ final class TuningViewModel: ObservableObject {
       if let p = p {
         self.mapDraftEnabled = p.enabled
         self.mapDraftBudget = p.budget
-        self.mapDraftLookahead = p.lookahead
       }
     }
   }
@@ -110,7 +108,6 @@ final class TuningViewModel: ObservableObject {
     guard let p = mapParams else { return false }
     return mapDraftEnabled != p.enabled
       || abs(mapDraftBudget - p.budget) > 0.01
-      || abs(mapDraftLookahead - p.lookahead) > 0.5
   }
 
   func saveMapParams() {
@@ -129,12 +126,6 @@ final class TuningViewModel: ObservableObject {
         let v = String(format: "%.1f", mapDraftBudget)
         let r = await service.saveMapCornerParam(key: "MapCornerBudget", value: v)
         results.append(r.ok ? "✓ Budget = \(v) m/s²" : "✗ Budget: \(r.detail)")
-        if !r.ok { hadError = true }
-      }
-      if let p = mapParams, abs(mapDraftLookahead - p.lookahead) > 0.5, !hadError {
-        let v = String(format: "%.0f", mapDraftLookahead)
-        let r = await service.saveMapCornerParam(key: "MapCornerLookahead", value: v)
-        results.append(r.ok ? "✓ Lookahead = \(v) m" : "✗ Lookahead: \(r.detail)")
         if !r.ok { hadError = true }
       }
       await MainActor.run { self.mapSaveResult = results.joined(separator: "\n") }

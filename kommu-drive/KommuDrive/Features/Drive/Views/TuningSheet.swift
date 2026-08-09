@@ -188,23 +188,6 @@ struct TuningSheet: View {
         .font(.system(size: 10))
         .foregroundStyle(.tertiary)
 
-      // Budget slider (used by Gentle/Standard as override; Auto/Sport are self-tuning)
-      if vm.mapDraftProfile < 2 {
-        VStack(alignment: .leading, spacing: 4) {
-          HStack {
-            Text("Aggressiveness")
-            Spacer()
-            Text(String(format: "%.1f m/s²", vm.mapDraftBudget))
-              .font(.system(size: 11, design: .monospaced))
-              .foregroundStyle(.secondary)
-          }
-          Slider(value: $vm.mapDraftBudget, in: 1.0...4.0, step: 0.1)
-          Text(lowerBudgetLabel(vm.mapDraftBudget))
-            .font(.system(size: 10))
-            .foregroundStyle(.tertiary)
-        }
-      }
-
       if vm.mapHasChanges {
         Button {
           vm.saveMapParams()
@@ -228,16 +211,6 @@ struct TuningSheet: View {
       Text("Curve Slowdown")
     } footer: {
       Text("Uses the driving model's predicted road curvature to slow for upcoming corners. Slowdown-only — can never accelerate. No internet or GPS needed.")
-    }
-  }
-
-  private func lowerBudgetLabel(_ b: Double) -> String {
-    switch b {
-    case ..<1.6: return "very cautious — firm braking for any curve"
-    case ..<2.1: return "conservative — slows for most corners"
-    case ..<2.8: return "balanced (recommended)"
-    case ..<3.5: return "spirited — mild scrub on tight corners"
-    default: return "aggressive — rarely triggers"
     }
   }
 

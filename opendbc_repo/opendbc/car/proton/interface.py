@@ -81,7 +81,7 @@ class CarInterface(CarInterfaceBase):
         ret.lateralTuning.pid.kpBP = [0.0, 5.0, 15.0, 25.0, 35.0]
         ret.lateralTuning.pid.kpV  = [0.0005, 0.02, 0.05, 0.10, 0.17]  # 54km/h: cut was 0.06->0.045 (a11fb76) to damp overshoot; partial restore to 0.05 (2026-08-09). City drive: no regression (step p95 0.026≈baseline). i/OUT still ~70% so don't fully restore to 0.06. 90/126 km/h unchanged.
         ret.lateralTuning.pid.kiBP = [0.0, 5.0, 15.0, 25.0, 35.0]
-        ret.lateralTuning.pid.kiV  = [0.001, 0.01, 0.09, 0.4, 0.5]
+        ret.lateralTuning.pid.kiV  = [0.001, 0.005, 0.05, 0.4, 0.5]  # decreased 0.01->0.005 @18kmh, 0.09->0.05 @54kmh (experiment, anti-low-speed-oscillation); ends unchanged. NOTE: only active after openpilot restart (CarParams re-read).
         ret.lateralTuning.pid.kf = 0.0000250
       else:
         # Torque (self-tuning via locationd/torqued) — OPT-IN (toggle off). Seed = torqued-converged; torqued refines online. Stock KP_INTERP rails at low speed on this car -> wobble (see result/lateral_analysis.py).

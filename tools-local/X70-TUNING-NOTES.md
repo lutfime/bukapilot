@@ -227,4 +227,6 @@ Reminder: **planner vars = WHEN/HOW-MUCH to slow; PI gains = HOW SMOOTHLY the ca
 - Don't waste effort "fixing" brakePressed — it's reliable. (Considered deriving it from pressure; unnecessary.)
 - The dangerous-feeling part (no OP for minutes) = the car withholding cruise, not a Kommu fault.
 
+**Why Kommu showed NO "cruise unavailable" (tracking gap):** `carstate.py:183` hardcodes `ret.cruiseState.available = True`, so OP never sees the Proton's actual cruise-available state — the "cannot enable cruise" only ever showed on the car's HUD. The Proton DOES broadcast it on CAN — `CRUISE_AVAILABLE` (`PCM_BUTTONS` msg 419, bit 17) and `CRUISE_DISABLED` (`ACC_CMD` msg 417, bit 12) — so it's trackable. TODO fix: `ret.cruiseState.available = bool(cp_cam.vl["PCM_BUTTONS"]["CRUISE_AVAILABLE"])` instead of the hardcoded True, so OP logs/surfaces the "cannot enable cruise" state instead of silently failing to engage. (Can't retroactively verify past incidents — OP logged the forced-True carState, not the raw bit.)
+
 

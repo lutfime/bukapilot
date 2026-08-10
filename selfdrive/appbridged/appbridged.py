@@ -128,6 +128,7 @@ def safe_put_all(settings_to_put, is_bool=False):
 # location already matches what Params.get_bool would read.
 X70_PID_TOGGLE_FILE = "/data/params/X70UsePidController"
 SUPERCOMBO_TOGGLE_FILE = "/data/params/UseSupercomboModel"
+MADS_TOGGLE_FILE = "/data/params/MadsEnabled"
 # NOTE: these live in /data/params/ (NOT /data/params/d/). openpilot's clearAll
 # (params.cc) deletes ANY file in d/ that isn't in params_keys.h on every boot —
 # since these keys can't be registered (no C++ rebuild), they must sit outside d/.
@@ -164,6 +165,26 @@ def set_supercombo_toggle(val):
     pass
   except OSError as e:
     cloudlog.error(f"Error setting UseSupercomboModel: {e}")
+
+def get_mads_toggle():
+  # DEFAULT OFF: absent file or anything other than "1" -> False.
+  try:
+    return open(MADS_TOGGLE_FILE).read().strip() == "1"
+  except (FileNotFoundError, OSError):
+    return False
+
+def set_mads_toggle(val):
+  # True -> write "1"; False -> remove file (reverts to default OFF).
+  try:
+    if val:
+      with open(MADS_TOGGLE_FILE, "w") as f:
+        f.write("1")
+    else:
+      os.remove(MADS_TOGGLE_FILE)
+  except FileNotFoundError:
+    pass
+  except OSError as e:
+    cloudlog.error(f"Error setting MadsEnabled: {e}")
 
 def reset_calibration(state):
   if state == log.SelfdriveState.OpenpilotState.disabled:
@@ -425,6 +446,7 @@ class AppBridge:
     sett['BrakeMagGain'] = safe_get('BrakeMagGain', False) if self.hw_helper.car_has_openpilot_long() else None
     sett['X70UsePidController'] = get_x70_pid_toggle()
     sett['UseSupercomboModel'] = get_supercombo_toggle()
+    sett['MadsEnabled'] = get_mads_toggle()
     try:
       self.ble.chunk_and_send(CHANNEL_SETTINGS, msgpack.packb(sett))
     except Exception as e:
@@ -459,6 +481,8 @@ class AppBridge:
             set_x70_pid_toggle(bool(settings.pop('X70UsePidController')))
           if 'UseSupercomboModel' in settings:
             set_supercombo_toggle(bool(settings.pop('UseSupercomboModel')))
+          if 'MadsEnabled' in settings:
+            set_mads_toggle(bool(settings.pop('MadsEnabled')))
           safe_put_all(settings, True)
         case 'saveConfig':
           if (car_name := settings.pop('CarName', None)) is not None:

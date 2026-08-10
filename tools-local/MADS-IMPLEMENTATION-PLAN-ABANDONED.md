@@ -1,9 +1,69 @@
 # MADS Implementation Plan — Proton X70 on Kommu KA2
 
-**Status:** PLANNED — not yet implemented. This document is the complete reference for
-implementing MADS (Modular Assistive Driving System) standby-steering on the KA2.
+> ⚠️ **DEPRECATED — OUTDATED AS OF 2026-08-09.** See "Why this plan is outdated" below.
+> The replacement plan lives at `.zcode/plans/plan-sess_mads-frogpilot-phase1.md`
+> (and is also tracked in the session). Do NOT execute Phase 2 of this document.
 
-**Last updated:** 2026-08-06
+## Why this plan is outdated (2026-08-09)
+
+This plan was written based on incomplete firmware research. Three findings since
+invalidate the core approach:
+
+1. **Two firmware guards, not one.** The plan assumed bypassing `pcm_cruise_check`
+   (proton.h:96) was sufficient to keep `controls_allowed` true in cruise standby.
+   It is NOT. A second, independent guard exists in `panda/board/main.c:202-206`
+   (verified in local tree):
+   ```c
+   if (controls_allowed && !heartbeat_engaged) {        // openpilot not reporting engaged
+     heartbeat_engaged_mismatches += 1U;
+     if (heartbeat_engaged_mismatches >= 3U) {          // ~3 seconds
+       controls_allowed = false;                         // ← forces it off anyway
+     }
+   }
+   ```
+   Even with `pcm_cruise_check` bypassed and `controls_allowed` forced true in
+   rx_hook, openpilot's USB heartbeat reports `engaged=false` once the user cancels
+   ACC. After 3 seconds, main.c clears `controls_allowed` regardless. **Phase 2.3
+   of this plan does NOT solve this.**
+
+2. **Kommu themselves abandoned the same approach.** The `proton_mads` branch
+   (commit `fa3f1638`, "Proton MADS", 2026-01-02; HEAD `27742b7`, 2026-03-05)
+   implemented the carstate `lat_only` latch + the wide-open KA1-style
+   `safety_proton.h` (`controls_allowed = true` unconditionally, `tx_hook` returns
+   true always, no rx liveness). It sat unmerged for 5 months and was never shipped
+   on any KA2 release branch. Reverting to the permissive KA1 firmware throws away
+   the entire KA2 safety architecture (torque limits, relay checks, CAN liveness)
+   that Kommu deliberately built — that's why they walked away from it.
+
+3. **The `lat_only` cruise-latch is the wrong mechanism.** Both production forks
+   (sunnypilot MADS, FrogPilot Always-On Lateral) deliberately avoid faking
+   `cruiseState.enabled = True`. Too many openpilot code paths key off it
+   (engage logic, alerts, UI). sunnypilot runs an independent state machine;
+   FrogPilot overrides `CC.latActive` directly in controlsd. Faking cruise state
+   has wide blast radius.
+
+## What's still valid in this document
+
+- **Section 1** (what MADS is, the X70 behavior) — still accurate
+- **Section 2** (KA1 vs KA2 firmware difference) — still accurate and useful
+- **Section 3a** (Proton tx_hook does NOT gate steering on `controls_allowed`) —
+  VERIFIED correct and load-bearing for the new plan
+- **Section 5** (brick vs boot-loop risk analysis, bootstub never touch) — still accurate
+- **Section 6** (signing keys recovery) — still accurate if firmware ever needed
+
+## What's superseded
+
+- **Phase 1** (carstate latch approach) — replaced by FrogPilot-style `CC.latActive`
+  override in controlsd (smaller blast radius, doesn't fake cruise state)
+- **Phase 2** (firmware `pcm_cruise_check` bypass) — insufficient (doesn't solve the
+  heartbeat counter), and possibly unnecessary (Proton tx_hook doesn't gate steering
+  on `controls_allowed` anyway). The new plan tests Python-only first.
+
+---
+
+**Original plan text below (preserved for reference, do NOT execute Phase 2):**
+
+**Last updated:** 2026-08-06 (original); 2026-08-09 (deprecation notice above)
 **Branch base:** `x70-test` (openpilot 0.10.3-based bukapilot)
 
 ---

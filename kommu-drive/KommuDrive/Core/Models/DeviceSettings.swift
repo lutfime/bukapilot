@@ -37,6 +37,7 @@ struct DeviceSettings: Equatable {
   let sshEnabled: Bool           // SshEnabled
   let usePidController: Bool     // X70UsePidController (X70 only: PID vs torque lateral controller)
   let useSupercomboModel: Bool   // UseSupercomboModel (0.11 fused model vs 0.10 split)
+  let madsEnabled: Bool          // MadsEnabled (standby lateral steering — MADS)
 
   // Update
   let updateAvailable: Bool
@@ -62,7 +63,7 @@ struct DeviceSettings: Equatable {
     hotspotIp: nil, hotspotEnabled: false,
     enabled: false, quietMode: false, experimentalMode: false,
     alcEnabled: false, ldwEnabled: false, recordFront: false, sshEnabled: false,
-    usePidController: false, useSupercomboModel: false,
+    usePidController: false, useSupercomboModel: false, madsEnabled: false,
     updateAvailable: false, updaterFetchAvailable: false,
     updaterTargetBranch: nil, updaterState: nil,
     carName: nil, drivePathOffset: nil, brakeMagGain: nil,
@@ -107,6 +108,7 @@ struct DeviceSettings: Equatable {
       sshEnabled: bool("SshEnabled"),
       usePidController: bool("X70UsePidController"),
       useSupercomboModel: bool("UseSupercomboModel"),
+      madsEnabled: bool("MadsEnabled"),
       updateAvailable: bool("UpdateAvailable"),
       updaterFetchAvailable: bool("UpdaterFetchAvailable"),
       updaterTargetBranch: str("UpdaterTargetBranch"),

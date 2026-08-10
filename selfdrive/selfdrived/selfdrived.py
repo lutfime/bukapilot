@@ -125,6 +125,15 @@ class SelfdriveD:
     self.mismatch_counter = 0
     self.cruise_mismatch_counter = 0
     self.last_steering_pressed_frame = 0
+    # MADS (standby lateral): keep openpilot engaged for steering after stock ACC cancels.
+    # Toggle is file-based (/data/params/MadsEnabled, default OFF) — no Params rebuild.
+    self.mads_enabled = False
+    try:
+      with open("/data/params/MadsEnabled") as _f:
+        self.mads_enabled = _f.read().strip() == "1"
+    except (FileNotFoundError, OSError):
+      pass
+    self.lat_only = False           # True when in standby-lateral (cruise available, stock ACC off)
     self.distance_traveled = 0
     self.last_functional_fan_frame = 0
     self.events_prev = []
@@ -209,8 +218,19 @@ class SelfdriveD:
           # body always wants to enable
           self.events.add(EventName.pcmEnable)
 
+      # MADS: compute lat_only EARLY so the gas gate below uses the current frame.
+      # When MAIN armed (available) but stock ACC off → standby lateral. Must be
+      # computed before the pedalPressed block so gas is gated correctly this frame.
+      if self.mads_enabled:
+        self.lat_only = (CS.cruiseState.available and not CS.cruiseState.enabled
+                         and CS.gearShifter == car.CarState.GearShifter.drive)
+      else:
+        self.lat_only = False
+
       # Disable on rising edge of accelerator or brake. Also disable on brake when speed > 0
-      if (CS.gasPressed and not self.CS_prev.gasPressed and self.disengage_on_accelerator) or \
+      # MADS: in standby-lateral, gas is manual and must NOT disengage. Brake always disengages.
+      gas_disengage = CS.gasPressed and not self.CS_prev.gasPressed and self.disengage_on_accelerator
+      if (gas_disengage and not self.lat_only) or \
         (CS.brakePressed and (not self.CS_prev.brakePressed or not CS.standstill)) or \
         (CS.regenBraking and (not self.CS_prev.regenBraking or not CS.standstill)):
         self.events.add(EventName.pedalPressed)
@@ -497,9 +517,38 @@ class SelfdriveD:
       self.mismatch_counter = 0
 
     # All pandas not in silent mode must have controlsAllowed when openpilot is enabled
-    if self.enabled and any(not ps.controlsAllowed for ps in self.sm['pandaStates']
+    # MADS: in standby-lateral, pcm_cruise_check in the firmware clears controls_allowed
+    # when stock ACC is off (reads CAN bus 2 directly). On Proton, controls_allowed does
+    # NOT gate steering torque (tx_hook checks LKAS bits + torque cap only), so this
+    # mismatch is expected and safe. We skip the counter increment to avoid firing
+    # controlsMismatch — but only for the controls_allowed path. Safety-model mismatches
+    # and rxCheck failures at line 320 still fire controlsMismatch normally.
+    if self.enabled and not self.lat_only and any(not ps.controlsAllowed for ps in self.sm['pandaStates']
            if ps.safetyModel not in IGNORED_SAFETY_MODES):
       self.mismatch_counter += 1
+
+    # MADS (FrogPilot-style): engage lateral in cruise standby and stay engaged.
+    # 1. When not yet enabled: inject pcmEnable to trigger engagement (same event
+    #    the SET button would fire). This transitions disabled → enabled in the
+    #    state machine.
+    # 2. When enabled: strip the disengage events that fire because stock ACC is off.
+    #
+    #    NOTE: pedalPressed is NOT stripped — brake must ALWAYS disengage. Gas is
+    #    already gated by `gas_disengage and not self.lat_only` earlier in this
+    #    function. Brake-induced pedalPressed flows through and fires USER_DISABLE.
+    #
+    #    NOTE: controlsMismatch is NOT stripped here — it's handled at the source
+    #    (the mismatch_counter increment is skipped when lat_only). Safety-model
+    #    mismatches and rxCheck failures still fire controlsMismatch normally.
+    if self.lat_only:
+      if not self.enabled:
+        self.events.add(EventName.pcmEnable)
+      for ev in (EventName.pcmDisable, EventName.buttonCancel,
+                 EventName.cruiseDisabled):
+        try:
+          self.events.events.remove(ev)
+        except ValueError:
+          pass
 
     return CS
 

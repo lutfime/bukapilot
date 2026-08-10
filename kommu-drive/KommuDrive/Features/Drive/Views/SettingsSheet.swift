@@ -16,10 +16,12 @@ struct SettingsSheet: View {
   @State private var sshEnabled: Bool = false
   @State private var usePidController: Bool = false
   @State private var useSupercomboModel: Bool = false
-  // Once the user taps a PID/model toggle, stop echo-syncing it so the displayed
+  @State private var madsEnabled: Bool = false
+  // Once the user taps a PID/model/MADS toggle, stop echo-syncing it so the displayed
   // value doesn't get overwritten by a lagging echo and visually "dance" on/off.
   @State private var pidTouched: Bool = false
   @State private var modelTouched: Bool = false
+  @State private var madsTouched: Bool = false
 
   @State private var showRebootConfirm = false
   @State private var showClearCacheConfirm = false
@@ -120,10 +122,11 @@ struct SettingsSheet: View {
       toggleRow("SSH", isOn: $sshEnabled, key: "SshEnabled", deviceValue: viewModel.settings.sshEnabled)
       toggleRow("PID Steering (X70)", isOn: $usePidController, key: "X70UsePidController", deviceValue: viewModel.settings.usePidController, touched: $pidTouched)
       toggleRow("0.11 Model (beta)", isOn: $useSupercomboModel, key: "UseSupercomboModel", deviceValue: viewModel.settings.useSupercomboModel, touched: $modelTouched)
+      toggleRow("MADS (beta)", isOn: $madsEnabled, key: "MadsEnabled", deviceValue: viewModel.settings.madsEnabled, touched: $madsTouched)
     } header: {
       Text("Software Settings")
     } footer: {
-      Text("Changes are sent to the device immediately. PID/model take effect on the next drive.")
+      Text("Changes are sent to the device immediately. PID/model/MADS take effect on the next drive.")
     }
   }
 
@@ -353,6 +356,7 @@ struct SettingsSheet: View {
     sshEnabled = viewModel.settings.sshEnabled
     if !pidTouched { usePidController = viewModel.settings.usePidController }
     if !modelTouched { useSupercomboModel = viewModel.settings.useSupercomboModel }
+    if !madsTouched { madsEnabled = viewModel.settings.madsEnabled }
   }
 }
 

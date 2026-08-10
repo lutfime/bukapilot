@@ -206,4 +206,25 @@ Reminder: **planner vars = WHEN/HOW-MUCH to slow; PI gains = HOW SMOOTHLY the ca
 - Advisory is somewhat noisy as the model updates (C4 bounced 68→34→50); fine in practice — planner takes `min()`, MPC smooths the decel.
 - **Verdict:** model-based CSC is the reliable primary; OSM-based mapd is unreliable (phantom corners from junction/spline artifacts) → disabled by default. On-road validation still pending (offroad during install).
 
+---
+
+# "Active → standby (blue) mid-drive" incident investigation (2026-08-10)
+
+**Symptom (user):** on a 2026-08-09 highway drive (>50 km/h, likely `04-01-58` which has 59–87 km/h cruise-disables), OP went active→standby with no felt intervention; couldn't re-engage for a few minutes; **Kommu showed no error, but the Proton HUD said "cannot enable cruise"**. Dangerous.
+
+**NOT our code (verified):** no driving-critical process crashed — controlsd/modeld/planner clean across all logs (only a thermald SIM-modem `IndexError`, hardware-monitoring, can't disengage). No `steerFault`/`accFault`/`canError`/`controlsFailed`/`thermal`/`commIssue` events anywhere. Event vocabulary was only driver-input types (`steerOverride`, `brakeHold`, `gasPressedOverride`, `steerSaturated`).
+
+**Proton brake signal layout (DBC `proton_general_pt.dbc`):**
+- `brakePressed` ← `PARKING_BRAKE` msg 293, **bit 1** (`BRAKE_PRESSED`). Distinct bit from `CAR_ON_HOLD` (bit 27) and `ESC_ON` (bit 16). NOT a same-bit mis-map.
+- brake pressure ← `BRAKE` msg 291, `BRAKE_PRESSURE` (16-bit, scale 0.0002).
+
+**brakePressed is RELIABLE (not glitchy — corrected an earlier wrong hypothesis):** on `04-01-58`, `brakePressed=True` 10.1% of frames; when True, **86% had real pressure (>0.05)**, only 2% near-zero, only **6% overlapped auto-hold**. So it tracks the pedal, not hold/noise. The earlier "min=0.00 → spurious" read was misleading (that's just 2% of frames).
+
+**Conclusion:** the disengages were **real light braking** (brake pressure present, ~10% of the highway drive = traffic braking; user may not have registered each light press). The **"cannot enable cruise for minutes" is car-side** — a Proton cruise-availability cooldown/fault after the brake/disengage (HUD confirms; OP can't engage when the car refuses cruise). Same class as "heavy rain disables cruise".
+
+**Takeaways:**
+- If "cannot enable cruise for minutes" recurs → it's a **Proton-side cruise reliability quirk**, not OP/CSC/mapd. Nothing OP can do (OP can't override the car refusing cruise). Worth a Proton service flag if frequent.
+- Don't waste effort "fixing" brakePressed — it's reliable. (Considered deriving it from pressure; unnecessary.)
+- The dangerous-feeling part (no OP for minutes) = the car withholding cruise, not a Kommu fault.
+
 

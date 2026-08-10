@@ -229,4 +229,22 @@ Reminder: **planner vars = WHEN/HOW-MUCH to slow; PI gains = HOW SMOOTHLY the ca
 
 **Why Kommu showed NO "cruise unavailable" (tracking gap):** `carstate.py:183` hardcodes `ret.cruiseState.available = True`, so OP never sees the Proton's actual cruise-available state — the "cannot enable cruise" only ever showed on the car's HUD. The Proton DOES broadcast it on CAN — `CRUISE_AVAILABLE` (`PCM_BUTTONS` msg 419, bit 17) and `CRUISE_DISABLED` (`ACC_CMD` msg 417, bit 12) — so it's trackable. TODO fix: `ret.cruiseState.available = bool(cp_cam.vl["PCM_BUTTONS"]["CRUISE_AVAILABLE"])` instead of the hardcoded True, so OP logs/surfaces the "cannot enable cruise" state instead of silently failing to engage. (Can't retroactively verify past incidents — OP logged the forced-True carState, not the raw bit.)
 
+---
+
+# CSC real-drive validation (2026-08-10 drives) + device-clock gotcha
+
+**⚠️ DEVICE CLOCK IS BROKEN:** timezone misconfigured (device `date` showed "PST"). `logMonoTime` + route names do NOT map to MYT (all 2026-08-10 drives logMonoTime→MYT ~08:00, but file-mtime shows the real afternoon times). **Use file mtime (`ls -lt`) for real wall-clock order/times, NOT logMonoTime or route names.** TODO: fix the device timezone.
+
+**CSC IS WORKING** (corrected an earlier wrong "model blind / curvature=0" claim — that was noise frames). On the 2026-08-10 afternoon drive (`05-58-42`, ended ~2:37pm per file-mtime):
+- **The model DOES detect corners** — both `desiredCurvature` (steering) AND `orientationRate.z/velocity.x` (CSC) read ~0.011–0.012 in turns. The signal **flickers** (0 ↔ 0.012 frame-to-frame), not consistently blind.
+- **CSC triggers correctly when advisory < speed:**
+  - ~2:20pm corner (seg21, real steer −54°): CSC advisory dropped **78→43 km/h** (detected), car decelerated **79→62 km/h** (aTarget −1.9 m/s²). CSC acted. **BUT a lead was present** → the decel was a mix of CSC + lead-following, indistinguishable to the driver.
+  - ~2:25pm corner (seg25, steer 34° @ 44km/h): CSC advisory **51 km/h** > speed 44 → CSC correctly **idle** (already safe). The 45→19 decel was **lead-following** (lead present 100%).
+- **Conclusion:** CSC works (detects via model curvature, triggers on speed-vs-advisory). On these drives its effect was **masked by lead cars** at every sharp corner. To *feel* CSC, need a **fast (60–80 km/h) corner with NO lead**.
+- **mapd skip-when-CSC-on:** added (planner skips mapd clamp when `CSCEnabled`) so mapd's OSM phantom advisories can't override CSC via `min()`. mapd forced OFF (`MapCornerEnabled=False`) — re-enabled earlier only because the OLD (un-rebuilt) iOS app toggles `MapCornerEnabled`. Fix = rebuild app (toggle → CSCEnabled).
+
+**CSC analysis method (no dedicated log field):** recompute advisory from `modelV2` (`advisory = sqrt(2.0 / max|orientationRate.z/velocity.x|)`, Standard budget), check `longitudinalPlan.aTarget` for the decel + `radarState.leadOne.status` for lead masking. Scripts: `result/csc_activity.py`, `result/corner_concrete.py`, `result/seg21_decel.py`, `result/curv_signal_compare.py`. Optional TODO: add a direct CSC-advisory log field (capnp change) for byte-exact capture.
+
+**ki decrease (lateral) — 2026-08-10 afternoon, didn't help:** other agent halved lateral `kiV` at 5/15 m/s (`[0.001,0.01,0.09,0.4,0.5]→[0.001,0.005,0.05,0.4,0.5]`) claiming less low-speed oscillation. Data: `i/OUT` unchanged at **43%** both morning/pre-ki + afternoon/post-ki (integrator steady-state is set by torque needed, not ki — halving ki just slows windup, doesn't reduce its role); step/oscillation metrics **mixed** (worse at 5–10 + 15–20 m/s, better only 10–15). Theory not supported; small afternoon sample (5 segs) + different routes confound. Consider reverting (slower integrator adds lag).
+
 

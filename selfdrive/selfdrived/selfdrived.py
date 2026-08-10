@@ -540,6 +540,10 @@ class SelfdriveD:
     #    NOTE: controlsMismatch is NOT stripped here — it's handled at the source
     #    (the mismatch_counter increment is skipped when lat_only). Safety-model
     #    mismatches and rxCheck failures still fire controlsMismatch normally.
+    # MADS DEBUG LOGGING (temporary)
+    if self.mads_enabled and self.sm.frame % 50 == 0:
+      from openpilot.common.swaglog import cloudlog
+      cloudlog.warning(f"MADS_DEBUG frame={self.sm.frame}: mads={self.mads_enabled} lat_only={self.lat_only} enabled={self.enabled} cruise_avail={CS.cruiseState.available} cruise_enabled={CS.cruiseState.enabled} gear={CS.gearShifter} events_count={len(self.events.events)}")
     if self.lat_only:
       if not self.enabled:
         self.events.add(EventName.pcmEnable)

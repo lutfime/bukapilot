@@ -245,6 +245,15 @@ Reminder: **planner vars = WHEN/HOW-MUCH to slow; PI gains = HOW SMOOTHLY the ca
 
 **CSC analysis method (no dedicated log field):** recompute advisory from `modelV2` (`advisory = sqrt(2.0 / max|orientationRate.z/velocity.x|)`, Standard budget), check `longitudinalPlan.aTarget` for the decel + `radarState.leadOne.status` for lead masking. Scripts: `result/csc_activity.py`, `result/corner_concrete.py`, `result/seg21_decel.py`, `result/curv_signal_compare.py`. Optional TODO: add a direct CSC-advisory log field (capnp change) for byte-exact capture.
 
-**ki decrease (lateral) — 2026-08-10 afternoon, didn't help:** other agent halved lateral `kiV` at 5/15 m/s (`[0.001,0.01,0.09,0.4,0.5]→[0.001,0.005,0.05,0.4,0.5]`) claiming less low-speed oscillation. Data: `i/OUT` unchanged at **43%** both morning/pre-ki + afternoon/post-ki (integrator steady-state is set by torque needed, not ki — halving ki just slows windup, doesn't reduce its role); step/oscillation metrics **mixed** (worse at 5–10 + 15–20 m/s, better only 10–15). Theory not supported; small afternoon sample (5 segs) + different routes confound. Consider reverting (slower integrator adds lag).
+**ki decrease (lateral) — VALIDATED 2026-08-10 (CORRECTED: earlier "didn't help" was wrong — invalid comparison, both drives had same ki):**
+- **Earlier analysis was INVALID:** morning + afternoon drives both used the ORIGINAL ki (CarParams in rlog confirmed `[0.001,0.01,0.09,0.4,0.5]`). The decreased ki was in interface.py but NOT active (no restart). My "i/OUT 43% unchanged → didn't help" was meaningless.
+- **VALID test (drive `11-04-40`, ki verified active `[0.001,0.005,0.05,0.4,0.5]` via CarParams):**
+  - **i/OUT: 55% → 26%** (halved — integrator role much smaller). ✓
+  - **Overshoot MAGNITUDE: median 7.4° → 3.9°** (nearly halved — each overshoot event milder, much less felt). ✓ User confirms: "doesn't really overshoot anymore."
+  - **Entry error median: 0.0° both drives** (no entry-lag penalty — earlier "9.5° entry worse" was a misleading MEAN skewed by outliers). ✓
+  - **Verdict: KEEP the decreased ki.** It halved overshoot severity with no entry penalty. Committed in git (`[0.001,0.005,0.05,0.4,0.5]`).
+- **Lesson:** always verify via CarParams in the rlog that the tuning was actually active before comparing. And use MEDIAN (not mean) for angleError — it's robust to outliers.
+
+**CSC validation on real drive (`11-04-40`, decreased ki):** user reports "working quite ok." Data: 2.4% would-slow (200 frames), min advisory 14 km/h (detected sharp corners), advisory median 60 km/h vs speed median 29 km/h (city — CSC mostly idle, correctly). CSC is detecting + advising at sharp corners. Effect sometimes masked by leads (earlier finding).
 
 

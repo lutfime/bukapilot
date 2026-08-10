@@ -162,9 +162,13 @@ class LongitudinalPlanner:
     # road curvature. Clamp v_cruise down to it before the MPC sees it, so the MPC plans a
     # smooth decel to the lower target. min() guarantees this can ONLY slow the car down,
     # never accelerate. No-op when MapCornerEnabled/MapCornerValid are false.
+    # IMPORTANT: when CSC (model-based) is ON, SKIP mapd entirely — mapd's OSM phantom
+    # advisories (false-low from junction/spline artifacts) would otherwise win via min()
+    # and override CSC's correct value. mapd is only used as a fallback when CSC is off.
     if (self.CP.openpilotLongitudinalControl
-            and self.params.get_bool("MapCornerEnabled", False)
-            and self.params.get_bool("MapCornerValid", False)):
+            and not self.params.get_bool("CSCEnabled")
+            and self.params.get_bool("MapCornerEnabled")
+            and self.params.get_bool("MapCornerValid")):
       try:
         _v_map = float(self.params.get("vCruiseMapCorner"))
         if _v_map > 1.0:

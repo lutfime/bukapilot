@@ -1,2 +1,2 @@
-# Model files tracked directly in git (not LFS — they're FP16 RKNN, not huge ONNX)
-# Previously driving_supercombo.rknn/.onnx were LFS; moved to models_dev/ (gitignored)
+# Model files are committed directly (raw blobs), matching the existing
+# production models (driving_vision.rknn etc). All under GitHub's 100 MB limit.

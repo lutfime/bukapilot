@@ -6,7 +6,7 @@ struct DriveView: View {
   @ObservedObject var viewModel: DriveSessionViewModel
 
   /// Tab identifiers — shared with RootView which owns the tab bar.
-  enum Tab: String, CaseIterable { case drive, tuning, drives, settings }
+  enum Tab: String, CaseIterable { case drive, tuning, drives, logs, settings }
 
   // The renderer is created once and shared between this view and the SceneView.
   @State private var renderer = DriveSceneRenderer()
@@ -72,6 +72,7 @@ struct DriveView: View {
       tabItem(icon: "car.fill", label: "Drive", tab: .drive, selectedTab: selectedTab)
       tabItem(icon: "slider.horizontal.3", label: "Tuning", tab: .tuning, selectedTab: selectedTab)
       tabItem(icon: "chart.line.uptrend.xyaxis", label: "Drives", tab: .drives, selectedTab: selectedTab)
+      tabItem(icon: "doc.text", label: "Logs", tab: .logs, selectedTab: selectedTab)
       tabItem(icon: "gearshape.fill", label: "Settings", tab: .settings, selectedTab: selectedTab)
     }
     .padding(.top, 6)

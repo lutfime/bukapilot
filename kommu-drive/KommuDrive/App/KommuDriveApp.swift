@@ -46,6 +46,8 @@ struct RootView: View {
           TuningSheet(viewModel: viewModel)
         case .drives:
           DriveBrowserSheet(viewModel: viewModel)
+        case .logs:
+          LogsView(viewModel: viewModel)
         case .settings:
           SettingsSheet(viewModel: viewModel)
         }

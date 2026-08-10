@@ -3,14 +3,17 @@
 > Reusable guide. Follow this whenever comma ships a new driving model checkpoint
 > (0.11.x, 0.12, etc.) and you want to run it on the KA2 NPU.
 >
-> **Current status:** The 0.11 supercombo model does NOT work on the KA2 at any precision.
-> C API benchmarks: FP16 ~101ms est., INT8 **79.5ms (12.6Hz)** — both below the 20Hz target.
-> INT8 gave 1.27× speedup (not the theoretical 2× — memory-bound layers don't benefit).
-> The 0.10 split model (**32.8ms / 30.5Hz** via C API) remains the production choice.
-> See §4 for the full analysis and §11 for how to benchmark.
+> **Current status (updated 2026-08-11):**
+> - **0.10.3 split** (32.8ms / 30.5Hz C API) — production default ✅
+> - **0.11 supercombo** (79.5ms / 12.6Hz C API INT8) — too slow, toggle REMOVED ❌
+> - **OPM10V3** (3-file split, ~32ms est) — converted + selector, ready for device test ✅
+> - **WMI V12** (2-file split community finetune, ~31ms est) — converted + selector ✅
 >
-> Last successful conversion: openpilot 0.11.2 standard `driving_supercombo.onnx` →
-> `driving_supercombo.rknn` (135 MB, FP16). Verified 2026-08-04, benchmarked 2026-08-07.
+> See §14 for community model conversion details, §13 for the simulator, §11 for device benchmarking.
+> Companion doc: `COMMUNITY-MODELS-RESEARCH.md` (ecosystem research + architecture analysis).
+>
+> Last successful conversion: OPM10V3 3-file split → 3 RKNN files (85 MB total, FP16).
+> Verified 2026-08-11, simulator-benchmarked 68.8ms sim → ~32ms device est.
 
 ---
 
@@ -764,46 +767,207 @@ Confirmed: production 0.10 models are FP16. `int8` appears 0 times, `float16` ap
 ## 13. RKNN Simulator (evaluate without a device)
 
 RKNN-Toolkit2 includes a **simulator** that runs on the Mac in Docker — no device needed.
-It can:
-- Run model inference (CPU, not NPU — timing is NOT representative of device speed)
-- Evaluate per-layer NPU performance estimates (`rknn.eval_perf()`)
-- Evaluate memory usage (`rknn.eval_memory()`)
-- Compare FP16 vs INT8 output accuracy on the same inputs
 
-**Limitation:** The simulator requires building from ONNX in the same session. You cannot
-`load_rknn()` a pre-compiled model and simulate it — you must `load_onnx()` → `build()` →
-`init_runtime(target=None)` in one process.
+### What the simulator CAN do
+- Build any model from ONNX (FP16 or INT8)
+- Run inference to verify outputs are valid (no inf/nan)
+- Compare output values between FP16 and INT8 (accuracy check)
+- Verify a model converts successfully before touching the device
 
-### Simulator workflow
+### What the simulator CANNOT do
+- **Show INT8 speedup** — CPU has no INT8 hardware, processes INT8 and FP16 at same speed
+- **Measure real NPU Hz** — simulator runs on CPU, NPU is much faster (2-3× for vision)
+- **Run eval_perf() or eval_memory()** — these require a real device target
+- **Load pre-compiled .rknn files** — must build from ONNX each time
 
+### Simulator Hz numbers are NOT device Hz
+
+| Model | Simulator Hz | Device Hz (C API) | Ratio |
+|-------|-------------|-------------------|-------|
+| 0.10 vision FP16 | 14.2 Hz | 33.7 Hz | 2.37× faster on device |
+| 0.11 supercombo INT8 | 11.7 Hz | 14.9 Hz | 1.27× faster on device |
+
+The simulator is 1.1-2.4× SLOWER than the real NPU depending on model type.
+Use simulator Hz only for relative comparison between configs, never as production estimate.
+
+### How to run the simulator
+
+**Prerequisites:**
+- Docker + Colima running on Mac
+- ONNX model file (preprocessed if needed — Gelu rewrite, UINT8 cast, etc.)
+- Calibration dataset (for INT8 only — FP16 doesn't need it)
+
+**Step 1 — Start Colima:**
 ```bash
-# In Docker (no device needed):
-python3 tools-local/sim_compare.py
+colima start --cpu 4 --memory 10 --disk 20
 ```
 
-This builds both FP16 and INT8 from the same ONNX, runs inference on real calibration
-frames, and reports the output difference between precisions:
-```
-Mean abs diff: 0.000123
-Max abs diff:  0.004567
-Relative diff: 0.034%
-Interpretation:
-  <0.5%  → imperceptible, safe for driving
-  0.5-2% → small drift, test drive needed
-  >2%    → significant, likely degrades driving quality
+**Step 2 — Run the simulator script:**
+```bash
+docker run --rm --platform linux/arm64 \
+  -v "$PWD":/work -w /work \
+  -e REPO_ROOT_OVERRIDE=/work \
+  ubuntu:22.04 \
+  bash -c '
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -qq && apt-get install -y -qq python3 python3-pip python3-dev \
+      libgl1 libglib2.0-0 cmake build-essential > /dev/null 2>&1
+    pip3 install --no-input \
+      "https://github.com/airockchip/rknn-toolkit2/raw/master/rknn-toolkit2/packages/arm64/rknn_toolkit2-2.3.2-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl" > /dev/null 2>&1
+    pip3 install --no-input onnx numpy > /dev/null 2>&1
+    python3 tools-local/sim_benchmark_all.py 2>&1
+  '
 ```
 
-**Important:** The simulator's inference time is **CPU time, NOT NPU time**. It tells you
-about accuracy and layer composition, not real device speed. Always confirm with the C API
-benchmark (§11) on the actual device.
+**Step 3 — Clean up Docker after (IMPORTANT — prevents disk full):**
+```bash
+colima stop
+docker system prune -af
+rm -rf ~/.colima/default/colima_disk
+```
 
-### When to use the simulator vs the device
+### Simulator script options
+
+**Benchmark all models:** `tools-local/sim_benchmark_all.py`
+- Builds FP16 and INT8 from each ONNX
+- Each model runs in a **separate subprocess** (required — INT8 inference crashes the
+  simulator, and running multiple models in one process causes segfaults)
+- Reports sim ms, sim Hz, output validity
+- Compares against known device Hz values
+
+**Test FP16 config variations:** `tools-local/sim_fp16_configs.py`
+- Tests 12 RKNN config combinations (flash attention, remove reshape, etc.)
+- Only FP16 (simulator can't run INT8 inference)
+- Useful for finding best config before device testing
+
+**Compare FP16 vs INT8 accuracy:** `tools-local/sim_compare.py`
+- Builds both precisions, runs same inputs, reports output diff
+- <0.5% diff = safe for driving, >2% = risky
+
+### Simulator calibration data (for INT8 builds)
+
+INT8 quantization needs calibration images. The data lives at:
+```
+tools-local/calibration_frames/
+├── extracted/          # 439 JPEG frames from real driving (both cameras)
+├── dataset.txt         # Supercombo calibration (6 inputs per sample)
+├── dataset_vision.txt  # Vision-only calibration (2 inputs per sample)
+├── calib_npy/          # Pre-converted .npy files for supercombo
+└── calib_vision_npy/   # Pre-converted .npy files for vision
+```
+
+If the .npy directories are missing, regenerate with:
+```bash
+python3 tools-local/calib_dataset.py
+```
+
+**Critical:** Dataset paths in dataset.txt must be **relative to the dataset.txt file's
+directory** (e.g., `calib_npy/s0000_img.npy`, not `/work/calib_npy/...`).
+
+### Simulator-to-device calibration
+
+To estimate device Hz from simulator Hz, use these ratios (measured from real models):
+
+| Model type | Sim/Device ratio | Use for |
+|-----------|-----------------|---------|
+| Vision-heavy (convolutions) | 2.37× | Models with img/big_img inputs, mostly Conv |
+| Policy-heavy (small MLPs) | 1.35× | Models with only vector inputs |
+| Large fused (supercombo) | 1.08× | Single large fused model |
+
+```
+estimated_device_hz = simulator_hz × ratio
+```
+
+### Known simulator issues
+
+| Issue | Cause | Fix |
+|-------|-------|-----|
+| INT8 inference segfaults | Simulator can't run INT8 ops on CPU | Only build INT8, benchmark on device |
+| "load_rknn not support simulator" | Can't load pre-compiled .rknn | Must build from ONNX each session |
+| eval_perf "unexpected keyword argument" | Wrong API signature | Don't pass inputs= to eval_perf |
+| eval_perf "Not support in simulator environment" | eval_perf needs real NPU target | **Cannot use eval_perf at all in simulator** — only on device |
+| eval_memory "not support in simulator" | Needs real device | Use device for perf/memory eval |
+| `inference()` "got unexpected keyword argument 'data_type'" | RKNN API (not rknnlite) doesn't accept data_type | Drop the `data_type=` arg for simulator inference |
+| `inference()` "expect 'nhwc' like" | Simulator defaults to NHWC | Pass `data_format="nchw"` to inference() |
+| Disk full after Docker runs | Colima disk image grows | Run `docker system prune -af` + remove colima_disk after each session |
+| Segfault when running multiple models | RKNN native code doesn't clean up | Run each model in separate subprocess |
+
+---
+
+## 14. Community models (OPM10V3, WMI V12, etc.)
+
+See `COMMUNITY-MODELS-RESEARCH.md` for the full ecosystem research. This section covers
+the practical conversion + integration steps.
+
+### Architecture types in the sunnypilot catalog
+
+| Type | Files | Example models | Conversion difficulty |
+|------|-------|----------------|----------------------|
+| **2-file split** | vision + policy | WMI V12, DTR v6, Tomb Raider 7-16, all 0.10 base | Easy — opset 17, no Gelu rewrite |
+| **3-file split** | vision + on_policy + off_policy | OPM10V3, Off-Policy Model v5, post-0.11 models | Medium — opset 20, needs Gelu rewrite |
+| **supercombo** | single fused | 0.11 base models, Space Labs | Same as §2-5 (too slow on KA2) |
+
+### Getting ONNX from sunnypilot models
+
+sunnypilot distributes compiled tinygrad `.pkl` files (not ONNX). To get the ONNX source:
+
+1. Find the model's `ref` commit in the manifest:
+   `driving_models_v18.json` from `sunnypilot-models` repo (gh-pages branch)
+2. Download ONNX via the LFS smudge trick:
+   ```bash
+   git clone --no-checkout --filter=blob:none https://github.com/commaai/openpilot.git
+   cd openpilot
+   git fetch origin <ref_commit>
+   git checkout FETCH_HEAD -- selfdrive/modeld/models/driving_*.onnx
+   cat selfdrive/modeld/models/driving_vision.onnx | git lfs smudge > driving_vision.onnx
+   ```
+3. Verify SHA256 matches the LFS pointer.
+
+### Conversion scripts
+
+| Script | Purpose |
+|--------|---------|
+| `convert_opm10v3_to_rknn.py` | 3-file split → 3 RKNN files (opset 20→19, Gelu rewrite) |
+| `convert_and_bench_wmiv12.py` | 2-file split → 2 RKNN + simulator benchmark (opset 17) |
+| `bench_opm10v3.py` | Simulator benchmark for any model type |
+| `cast_uint8_inputs_to_float.py` | Helper — cast img/big_img UINT8→FLOAT |
+| `rewrite_gelu_for_opset19.py` | Helper — rewrite opset-20 Gelu→erf for opset 19 |
+
+### Converted models in this repo
+
+```
+selfdrive/modeld/models_dev/
+├── opm10v3/   ← 3-file split (85 MB total)
+└── wmiv12/    ← 2-file split (92 MB total)
+
+tools-local/models_store/
+├── opm10v3-onnx-original/   ← pristine opset 20 ONNX (for reconversion)
+└── wmiv12-onnx-original/    ← pristine opset 17 ONNX
+```
+
+### Runtime: model selector
+
+The app has a model selector (Menu picker) that writes `SelectedDrivingModel` to
+`/data/params/SelectedDrivingModel`. modeld reads this at startup.
+
+Values: `"default"` (0.10.3), `"wmiv12"`, `"opm10v3"`.
+
+To add a new model:
+1. Convert ONNX → RKNN (see above)
+2. Add path constants in `modeld.py`
+3. Add `_use_xxx()` gate + branch in `main()`
+4. Add Menu button in `SettingsSheet.swift`
+5. Add case in `modelDisplayName()`
+| `target='rk3588'` fails with "librknnrt.so not found" | Needs device runtime library | Use `target=None` (simulator mode) |
+
+### When to use simulator vs device
 
 | Task | Simulator (Docker) | Device (C API) |
 |------|-------------------|----------------|
-| Check FP16 vs INT8 accuracy diff | ✅ | Can do but slower |
-| Estimate per-layer NPU timing | ✅ (rough) | ✅ (real) |
-| Measure production inference speed | ❌ | ✅ |
-| Detect CPU fallback layers | ✅ | ✅ |
+| Check model converts successfully | ✅ Fast | ✅ But slower |
+| Verify outputs valid (no inf/nan) | ✅ FP16 only | ✅ FP16 and INT8 |
+| Compare FP16 vs INT8 accuracy | ✅ | ✅ |
+| Test different RKNN configs | ✅ FP16 configs | ✅ All configs |
+| Measure real production Hz | ❌ | ✅ Required |
+| Benchmark INT8 speed | ❌ | ✅ Required |
 | Test drive the car | ❌ | ✅ |
-| No device available | ✅ | ❌ |

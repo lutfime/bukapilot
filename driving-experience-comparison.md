@@ -1,8 +1,13 @@
-# openpilot Driving Experience: 0.9 → 0.10 → 0.11
+# openpilot Driving Experience: 0.9 → 0.10 → 0.11 + Community Models
 
 > Is the upgrade worth it, and is this the path to fully self-driving?
-> Compiled 2026-08-04. Sources cited inline; community quotes from r/Comma_ai (search-snippet
+> Compiled 2026-08-04, updated 2026-08-11 with community model research.
+> Sources cited inline; community quotes from r/Comma_ai (search-snippet
 > verified, open threads directly for full context).
+>
+> **Update (2026-08-11):** Added §5 — Community Models (WMI V12, OPM10V3, DTR v6).
+> These are community-trained finetunes of comma's base models that run at full speed
+> on the KA2. See `tools-local/COMMUNITY-MODELS-RESEARCH.md` for technical details.
 
 ---
 
@@ -180,3 +185,50 @@ system today — the driver is still responsible and still required.
 > **Sourcing caveat:** Reddit blocked direct fetches (anti-bot); quotes above come from
 > search-engine snippets and should be verified by opening threads directly. The comma blog
 > quotes are verbatim from fetched pages.
+
+---
+
+## 5. Community Models (added 2026-08-11)
+
+Beyond comma's stock models, the community trains finetunes that target different driving
+styles. These run through forks like sunnypilot and FrogPilot, and are distributed as
+compiled tinygrad models via sunnypilot's model manager.
+
+### Which models work on the KA2?
+
+**Critical finding:** not all community models are supercombo. The architecture depends on
+the openpilot base version the model was trained against. Models built on the 0.10.x split
+architecture (vision + policy) run at full speed on the KA2 (~30 Hz). Only the fused
+supercombo models hit the 12 Hz ceiling.
+
+| Model | Base | Architecture | Est KA2 speed | Community verdict |
+|-------|------|-------------|---------------|-------------------|
+| **WMI V12** | 0.10.3 | 2-file split | ~31ms / ~32 Hz | Community-recommended; solid all-around. Some left-drift on highways. |
+| **OPM10V3** | post-0.11 | 3-file split | ~32ms / ~31 Hz | Strong longitudinal; lateral has right-bias + wobble. Praise for curve handling. |
+| **DTR v6** | 0.10.3 | 2-file split | ~31ms (est) | "Wife-approved" comfort. Good curves. Could center better on highways. |
+| **Tomb Raider 16** | 0.10.3 | 2-file split | ~31ms (est) | "Best lateral model since TR16." Strong lane-keeping. |
+| **0.11 supercombo** | 0.11 | fused | 79.5ms / 12.6 Hz | ❌ Too slow on KA2 |
+
+### bukapilot integration status
+
+All three viable model types are integrated into a **model selector** in the KommuDrive app:
+- Default (0.10.3) — production
+- WMI V12 — community finetune
+- OP Model 10 V3 — 3-file split
+
+The selector writes `SelectedDrivingModel` to `/data/params/`. modeld reads it at startup.
+Switching models takes effect on the next drive.
+
+### Should you try them?
+
+**Yes** — the simulator benchmarks confirm all three models run at ~30 Hz on the KA2 NPU,
+comparable to the production 0.10.3. The real differentiator is **driving feel**, which
+can only be judged on a test drive. The community reviews suggest:
+
+- **WMI V12** if you want a proven, community-recommended model with minimal risk
+- **OPM10V3** if you want better longitudinal control (acceleration/braking) and can
+  tolerate some lateral tuning (the wobble may be mitigated by bukapilot's `LAT_SMOOTH_SECONDS`)
+- **DTR v6** or **Tomb Raider 16** (future candidates) for comfort or lateral precision
+
+See `tools-local/COMMUNITY-MODELS-RESEARCH.md` for the full technical analysis, conversion
+pipeline, and architecture details.

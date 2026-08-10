@@ -36,7 +36,8 @@ struct DeviceSettings: Equatable {
   let recordFront: Bool          // RecordFront (dashcam record driver-facing cam)
   let sshEnabled: Bool           // SshEnabled
   let usePidController: Bool     // X70UsePidController (X70 only: PID vs torque lateral controller)
-  let useSupercomboModel: Bool   // UseSupercomboModel (0.11 fused model vs 0.10 split)
+  let selectedDrivingModel: String // SelectedDrivingModel ("default" | "opm10v3" | "wmiv12" | ...)
+  let availableDrivingModels: [String] // AvailableDrivingModels (dynamic from device)
   let madsEnabled: Bool          // MadsEnabled (standby lateral steering — MADS)
 
   // Update
@@ -63,7 +64,7 @@ struct DeviceSettings: Equatable {
     hotspotIp: nil, hotspotEnabled: false,
     enabled: false, quietMode: false, experimentalMode: false,
     alcEnabled: false, ldwEnabled: false, recordFront: false, sshEnabled: false,
-    usePidController: false, useSupercomboModel: false, madsEnabled: false,
+    usePidController: false, selectedDrivingModel: "default", availableDrivingModels: ["default"], madsEnabled: false,
     updateAvailable: false, updaterFetchAvailable: false,
     updaterTargetBranch: nil, updaterState: nil,
     carName: nil, drivePathOffset: nil, brakeMagGain: nil,
@@ -107,7 +108,8 @@ struct DeviceSettings: Equatable {
       recordFront: bool("RecordFront"),
       sshEnabled: bool("SshEnabled"),
       usePidController: bool("X70UsePidController"),
-      useSupercomboModel: bool("UseSupercomboModel"),
+      selectedDrivingModel: str("SelectedDrivingModel") ?? "default",
+      availableDrivingModels: (raw["AvailableDrivingModels"] as? [String]) ?? ["default"],
       madsEnabled: bool("MadsEnabled"),
       updateAvailable: bool("UpdateAvailable"),
       updaterFetchAvailable: bool("UpdaterFetchAvailable"),

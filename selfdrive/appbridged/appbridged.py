@@ -127,7 +127,7 @@ def safe_put_all(settings_to_put, is_bool=False):
 # ever registered + params_pyx rebuilt, switch back to bool_keys/safe_put_all — the file
 # location already matches what Params.get_bool would read.
 X70_PID_TOGGLE_FILE = "/data/params/X70UsePidController"
-SUPERCOMBO_TOGGLE_FILE = "/data/params/UseSupercomboModel"
+DRIVING_MODEL_FILE = "/data/params/SelectedDrivingModel"
 MADS_TOGGLE_FILE = "/data/params/MadsEnabled"
 # NOTE: these live in /data/params/ (NOT /data/params/d/). openpilot's clearAll
 # (params.cc) deletes ANY file in d/ that isn't in params_keys.h on every boot —
@@ -148,23 +148,41 @@ def set_x70_pid_toggle(val):
   except OSError as e:
     cloudlog.error(f"Error setting X70UsePidController: {e}")
 
-def get_supercombo_toggle():
+def get_driving_model():
+  # DEFAULT = "default" (0.10.3 split). Other values: "opm10v3" (3-file split), "wmiv12".
   try:
-    return open(SUPERCOMBO_TOGGLE_FILE).read().strip() == "1"
+    return open(DRIVING_MODEL_FILE).read().strip() or "default"
   except (FileNotFoundError, OSError):
-    return False
+    return "default"
 
-def set_supercombo_toggle(val):
+def get_available_driving_models():
+  """Detect which driving models are available based on model files present.
+  Always includes 'default' (the 0.10.3 production model).
+  Returns a list of model keys: ['default', 'wmiv12', 'opm10v3', ...]"""
+  models_dir = "/data/openpilot/selfdrive/modeld/models"
+  available = ["default"]
+  # WMI v12: 2-file split (vision + policy with _wmiv12 suffix)
+  if all(os.path.exists(os.path.join(models_dir, f)) for f in
+         ["driving_vision_wmiv12.rknn", "driving_policy_wmiv12.rknn"]):
+    available.append("wmiv12")
+  # OPM10V3: 3-file split (vision + on_policy + off_policy with _opm10v3 suffix)
+  if all(os.path.exists(os.path.join(models_dir, f)) for f in
+         ["driving_vision_opm10v3.rknn", "driving_on_policy_opm10v3.rknn",
+          "driving_off_policy_opm10v3.rknn"]):
+    available.append("opm10v3")
+  return available
+
+def set_driving_model(val):
   try:
-    if val:
-      with open(SUPERCOMBO_TOGGLE_FILE, "w") as f:
-        f.write("1")
+    if val == "default" or not val:
+      os.remove(DRIVING_MODEL_FILE)
     else:
-      os.remove(SUPERCOMBO_TOGGLE_FILE)
+      with open(DRIVING_MODEL_FILE, "w") as f:
+        f.write(val)
   except FileNotFoundError:
     pass
   except OSError as e:
-    cloudlog.error(f"Error setting UseSupercomboModel: {e}")
+    cloudlog.error(f"Error setting SelectedDrivingModel: {e}")
 
 def get_mads_toggle():
   # DEFAULT OFF: absent file or anything other than "1" -> False.
@@ -445,7 +463,8 @@ class AppBridge:
       sett[key] = safe_get(key, False)
     sett['BrakeMagGain'] = safe_get('BrakeMagGain', False) if self.hw_helper.car_has_openpilot_long() else None
     sett['X70UsePidController'] = get_x70_pid_toggle()
-    sett['UseSupercomboModel'] = get_supercombo_toggle()
+    sett['SelectedDrivingModel'] = get_driving_model()
+    sett['AvailableDrivingModels'] = get_available_driving_models()
     sett['MadsEnabled'] = get_mads_toggle()
     try:
       self.ble.chunk_and_send(CHANNEL_SETTINGS, msgpack.packb(sett))
@@ -479,8 +498,8 @@ class AppBridge:
           cloudlog.info(f"saveToggle received: {dict(settings)}")  # diagnostic: confirm app toggles reach the device
           if 'X70UsePidController' in settings:
             set_x70_pid_toggle(bool(settings.pop('X70UsePidController')))
-          if 'UseSupercomboModel' in settings:
-            set_supercombo_toggle(bool(settings.pop('UseSupercomboModel')))
+          if 'SelectedDrivingModel' in settings:
+            set_driving_model(str(settings.pop('SelectedDrivingModel')))
           if 'MadsEnabled' in settings:
             set_mads_toggle(bool(settings.pop('MadsEnabled')))
           safe_put_all(settings, True)

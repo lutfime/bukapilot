@@ -15,7 +15,7 @@ struct SettingsSheet: View {
   @State private var recordDriverCamera: Bool = false
   @State private var sshEnabled: Bool = false
   @State private var usePidController: Bool = false
-  @State private var useSupercomboModel: Bool = false
+  @State private var selectedDrivingModel: String = "default"
   @State private var madsEnabled: Bool = false
   // Once the user taps a PID/model/MADS toggle, stop echo-syncing it so the displayed
   // value doesn't get overwritten by a lagging echo and visually "dance" on/off.
@@ -121,13 +121,54 @@ struct SettingsSheet: View {
       toggleRow("Record Driver Camera", isOn: $recordDriverCamera, key: "RecordFront", deviceValue: viewModel.settings.recordFront)
       toggleRow("SSH", isOn: $sshEnabled, key: "SshEnabled", deviceValue: viewModel.settings.sshEnabled)
       toggleRow("PID Steering (X70)", isOn: $usePidController, key: "X70UsePidController", deviceValue: viewModel.settings.usePidController, touched: $pidTouched)
-      toggleRow("0.11 Model (beta)", isOn: $useSupercomboModel, key: "UseSupercomboModel", deviceValue: viewModel.settings.useSupercomboModel, touched: $modelTouched)
+      drivingModelSelector
       toggleRow("MADS (beta)", isOn: $madsEnabled, key: "MadsEnabled", deviceValue: viewModel.settings.madsEnabled, touched: $madsTouched)
     } header: {
       Text("Software Settings")
     } footer: {
       Text("Changes are sent to the device immediately. PID/model/MADS take effect on the next drive.")
     }
+  }
+
+  private var drivingModelSelector: some View {
+    HStack {
+      Text("Driving Model")
+      Spacer()
+      Menu {
+        ForEach(viewModel.settings.availableDrivingModels, id: \.self) { model in
+          Button {
+            selectModel(model)
+          } label: {
+            HStack {
+              Text(modelDisplayName(model))
+              if selectedDrivingModel == model { Image(systemName: "checkmark") }
+            }
+          }
+        }
+      } label: {
+        HStack(spacing: 4) {
+          Text(modelDisplayName(selectedDrivingModel))
+            .foregroundStyle(.primary)
+          Image(systemName: "chevron.up.chevron.down")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+      }
+    }
+  }
+
+  private func modelDisplayName(_ key: String) -> String {
+    switch key {
+    case "opm10v3": return "OP Model 10 V3"
+    case "wmiv12": return "WMI V12"
+    default: return "Default (0.10.3)"
+    }
+  }
+
+  private func selectModel(_ model: String) {
+    modelTouched = true
+    selectedDrivingModel = model
+    viewModel.saveDrivingModel(model)
   }
 
   // Single-row update section: shows current state and a context-appropriate
@@ -355,7 +396,7 @@ struct SettingsSheet: View {
     recordDriverCamera = viewModel.settings.recordFront
     sshEnabled = viewModel.settings.sshEnabled
     if !pidTouched { usePidController = viewModel.settings.usePidController }
-    if !modelTouched { useSupercomboModel = viewModel.settings.useSupercomboModel }
+    if !modelTouched { selectedDrivingModel = viewModel.settings.selectedDrivingModel }
     if !madsTouched { madsEnabled = viewModel.settings.madsEnabled }
   }
 }

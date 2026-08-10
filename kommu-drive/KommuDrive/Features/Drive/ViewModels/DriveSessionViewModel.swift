@@ -272,6 +272,12 @@ final class DriveSessionViewModel: ObservableObject {
     sendCommand(["msgType": "saveToggle", key: value])
   }
 
+  /// Select a driving model (e.g. "default", "wmiv12", "opm10v3").
+  /// Maps to `msgType: 'saveToggle'` with a String value for `SelectedDrivingModel`.
+  func saveDrivingModel(_ model: String) {
+    sendCommand(["msgType": "saveToggle", "SelectedDrivingModel": model])
+  }
+
   /// Reboot the device. Only acts when openpilot is disabled.
   func rebootDevice() {
     sendCommand(["msgType": "reboot"])

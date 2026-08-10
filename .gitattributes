@@ -1,2 +1,2 @@
-selfdrive/modeld/models/driving_supercombo.rknn filter=lfs diff=lfs merge=lfs -text
-selfdrive/modeld/models/driving_supercombo.onnx filter=lfs diff=lfs merge=lfs -text
+# Model files tracked directly in git (not LFS — they're FP16 RKNN, not huge ONNX)
+# Previously driving_supercombo.rknn/.onnx were LFS; moved to models_dev/ (gitignored)

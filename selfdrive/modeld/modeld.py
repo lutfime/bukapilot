@@ -59,7 +59,20 @@ VISION_RKNN_PATH = MODEL_DIR / os.getenv("RKNN_VISION_MODEL", "driving_vision.rk
 POLICY_RKNN_PATH = MODEL_DIR / os.getenv("RKNN_POLICY_MODEL", "driving_policy.rknn")
 SUPERCOMBO_RKNN_PATH = MODEL_DIR / os.getenv("RKNN_SUPERCOMBO_MODEL", "driving_supercombo.rknn")
 SUPERCOMBO_METADATA_PATH = MODEL_DIR / 'driving_supercombo_metadata.pkl'
-SUPERCOMBO_TOGGLE_FILE = Path('/data/params/UseSupercomboModel')  # NOT in d/ — clearAll wipes unregistered files in d/ on every boot
+
+# 3-file split (OPM10V3 and similar post-0.11 community models): vision + on_policy + off_policy
+VISION_3SPLIT_RKNN_PATH = MODEL_DIR / os.getenv("RKNN_3SPLIT_VISION_MODEL", "driving_vision_opm10v3.rknn")
+ON_POLICY_RKNN_PATH = MODEL_DIR / os.getenv("RKNN_3SPLIT_ON_POLICY_MODEL", "driving_on_policy_opm10v3.rknn")
+OFF_POLICY_RKNN_PATH = MODEL_DIR / os.getenv("RKNN_3SPLIT_OFF_POLICY_MODEL", "driving_off_policy_opm10v3.rknn")
+VISION_3SPLIT_METADATA_PATH = MODEL_DIR / 'driving_vision_opm10v3_metadata.pkl'
+ON_POLICY_METADATA_PATH = MODEL_DIR / 'driving_on_policy_opm10v3_metadata.pkl'
+OFF_POLICY_METADATA_PATH = MODEL_DIR / 'driving_off_policy_opm10v3_metadata.pkl'
+# WMI v12 (2-file split, community finetune of 0.10.3 policy head)
+WMI_VISION_RKNN_PATH = MODEL_DIR / os.getenv("RKNN_WMI_VISION_MODEL", "driving_vision_wmiv12.rknn")
+WMI_POLICY_RKNN_PATH = MODEL_DIR / os.getenv("RKNN_WMI_POLICY_MODEL", "driving_policy_wmiv12.rknn")
+WMI_VISION_METADATA_PATH = MODEL_DIR / 'driving_vision_wmiv12_metadata.pkl'
+WMI_POLICY_METADATA_PATH = MODEL_DIR / 'driving_policy_wmiv12_metadata.pkl'
+DRIVING_MODEL_FILE = Path('/data/params/SelectedDrivingModel')  # NOT in d/ — clearAll wipes unregistered files
 
 def _use_rknn_driving() -> bool:
   """Use RKNN for driving model when configured .rknn files exist (default). Set USE_RKNN=0 to force tinygrad."""
@@ -67,20 +80,33 @@ def _use_rknn_driving() -> bool:
     return False
   return os.getenv('USE_RKNN', '1') != '0'
 
-def _use_rknn_supercombo() -> bool:
-  """Use the fused 0.11 supercombo model. OFF by default — the 0.10 split model is the safe default.
-  Enable via the KommuDrive app toggle (writes /data/params/UseSupercomboModel) OR env var
-  USE_SUPERCOMBO_MODEL=1. Both require the .rknn + metadata files present.
-  Reads the toggle file directly (no C++ Params rebuild needed)."""
-  enabled = os.getenv('USE_SUPERCOMBO_MODEL', '0') == '1'
-  if not enabled:
+def _get_selected_driving_model() -> str:
+  """Read the selected driving model from the app selector (or env override).
+  Returns one of: 'default' (0.10.3 split), 'wmiv12' (community finetune), 'opm10v3' (3-file split).
+  Env DRIVING_MODEL overrides the file for testing."""
+  model = os.getenv('DRIVING_MODEL', '')
+  if not model:
     try:
-      enabled = SUPERCOMBO_TOGGLE_FILE.read_text().strip() == '1'
+      model = DRIVING_MODEL_FILE.read_text().strip()
     except (FileNotFoundError, OSError):
-      pass
-  if not enabled:
+      model = ''
+  return model or 'default'
+
+def _use_wmi_v12() -> bool:
+  """Use WMI v12 community finetune (2-file split, same architecture as 0.10.3)."""
+  if _get_selected_driving_model() != 'wmiv12':
     return False
-  return SUPERCOMBO_RKNN_PATH.exists() and SUPERCOMBO_METADATA_PATH.exists()
+  return WMI_VISION_RKNN_PATH.exists() and WMI_POLICY_RKNN_PATH.exists()
+
+def _use_rknn_3split() -> bool:
+  """Use the 3-file OPM10V3 split model. Selected via the app model selector or DRIVING_MODEL=opm10v3.
+  Requires all 6 files (3 .rknn + 3 _metadata.pkl) to be present."""
+  if _get_selected_driving_model() != 'opm10v3':
+    return False
+  return all(p.exists() for p in [
+    VISION_3SPLIT_RKNN_PATH, ON_POLICY_RKNN_PATH, OFF_POLICY_RKNN_PATH,
+    VISION_3SPLIT_METADATA_PATH, ON_POLICY_METADATA_PATH, OFF_POLICY_METADATA_PATH,
+  ])
 
 LAT_SMOOTH_SECONDS = 0.2  # smooth the RKNN model's noisy desired_curvature. PID-drive data (2026-08-06) proved the wobble/stair-step is MODEL-driven (desired-angle noise 0.5-2.2 deg, kp-independent) -> smooth the model path, NOT the PID gains. 0.15 attenuated the ~3.5Hz model noise; bumped to 0.2 to further reduce the steering stair-step (big discrete angle jumps amplified by kp into ~14-unit CAN steps). Re-plot next drive; bump higher if steps still feel coarse.
 LONG_SMOOTH_SECONDS = 0.3
@@ -405,6 +431,30 @@ def _load_rknn_metadata():
   }
 
 
+def _load_3split_metadata():
+  """Load metadata for the 3-file split model (vision + on_policy + off_policy)."""
+  with open(VISION_3SPLIT_METADATA_PATH, 'rb') as f:
+    v = pickle.load(f)
+  with open(ON_POLICY_METADATA_PATH, 'rb') as f:
+    op = pickle.load(f)
+  with open(OFF_POLICY_METADATA_PATH, 'rb') as f:
+    ofp = pickle.load(f)
+  v_size = int(np.prod(v['output_shapes']['outputs']))
+  op_size = int(np.prod(op['output_shapes']['outputs']))
+  ofp_size = int(np.prod(ofp['output_shapes']['outputs']))
+  return {
+    'vision_input_shapes': v['input_shapes'],
+    'vision_input_names': list(v['input_shapes'].keys()),
+    'vision_output_slices': v['output_slices'],
+    'vision_output_size': v_size,
+    'policy_input_shapes': op['input_shapes'],  # on_policy and off_policy share the same input contract
+    'on_policy_output_slices': op['output_slices'],
+    'on_policy_output_size': op_size,
+    'off_policy_output_slices': ofp['output_slices'],
+    'off_policy_output_size': ofp_size,
+  }
+
+
 class ModelStateRKNN:
   """Driving model state using RKNN (vision + policy). Inputs are cast to float16 before inference. Prefers C++ path when built."""
 
@@ -688,6 +738,114 @@ class ModelStateSupercomboRKNN:
     return outputs_dict
 
 
+class ModelState3SplitRKNN:
+  """Driving model state for the 3-file OPM10V3 split (vision + on_policy + off_policy) on RKNN.
+
+  This is comma's post-0.11 architecture. Vision runs once; its hidden_state feeds
+  features_buffer for BOTH policy heads. on_policy provides plan + desire_state (driving control);
+  off_policy provides lane_lines + lead + road_edges (perception). Following sunnypilot's
+  merge rule: off_policy's plan is dropped when on_policy has one (on_policy plan wins).
+  Python rknnlite only (no C++ fast path yet).
+  """
+
+  def __init__(self, context: CLContext):
+    meta = _load_3split_metadata()
+    self.vision_input_shapes = meta['vision_input_shapes']
+    self.vision_input_names = meta['vision_input_names']
+    self.vision_output_slices = meta['vision_output_slices']
+    self.policy_input_shapes = meta['policy_input_shapes']
+    self.on_policy_output_slices = meta['on_policy_output_slices']
+    self.off_policy_output_slices = meta['off_policy_output_slices']
+    self._vision_output_size = meta['vision_output_size']
+    self._on_policy_output_size = meta['on_policy_output_size']
+    self._off_policy_output_size = meta['off_policy_output_size']
+
+    from openpilot.selfdrive.modeld.runners.driving_3split_rknn import Driving3SplitRKNNRunner
+    self._rknn = Driving3SplitRKNNRunner(MODEL_DIR)
+    cloudlog.warning("modeld 3-split: using Python rknnlite runner (OPM10V3: vision=%s on_policy=%s off_policy=%s)",
+                     VISION_3SPLIT_RKNN_PATH.name, ON_POLICY_RKNN_PATH.name, OFF_POLICY_RKNN_PATH.name)
+
+    self.frames = {
+      name: DrivingModelFrame(context, ModelConstants.MODEL_RUN_FREQ // ModelConstants.MODEL_CONTEXT_FREQ)
+      for name in self.vision_input_names
+    }
+    self.prev_desire = np.zeros(ModelConstants.DESIRE_LEN, dtype=np.float32)
+    self.numpy_inputs = {k: np.zeros(self.policy_input_shapes[k], dtype=np.float32) for k in self.policy_input_shapes}
+    self.full_input_queues = InputQueues(
+      ModelConstants.MODEL_CONTEXT_FREQ, ModelConstants.MODEL_RUN_FREQ, ModelConstants.N_FRAMES
+    )
+    for k in ['desire_pulse', 'features_buffer']:
+      self.full_input_queues.update_dtypes_and_shapes(
+        {k: self.numpy_inputs[k].dtype}, {k: self.numpy_inputs[k].shape}
+      )
+    self.full_input_queues.reset()
+    self.vision_output = np.zeros(self._vision_output_size, dtype=np.float32)
+    self.on_policy_output = np.zeros(self._on_policy_output_size, dtype=np.float32)
+    self.off_policy_output = np.zeros(self._off_policy_output_size, dtype=np.float32)
+    self.parser = Parser()
+
+  def slice_outputs(self, model_outputs: np.ndarray, output_slices: dict[str, slice]) -> dict[str, np.ndarray]:
+    return {k: model_outputs[np.newaxis, v] for k, v in output_slices.items()}
+
+  def run(self, bufs: dict[str, VisionBuf], transforms: dict[str, np.ndarray],
+          inputs: dict[str, np.ndarray], prepare_only: bool, frame_id: int | None = None) -> dict[str, np.ndarray] | None:
+    inputs['desire_pulse'][0] = 0
+    new_desire = np.where(inputs['desire_pulse'] - self.prev_desire > .99, inputs['desire_pulse'], 0)
+    self.prev_desire[:] = inputs['desire_pulse']
+
+    imgs_cl = {name: self.frames[name].prepare(bufs[name], transforms[name].flatten()) for name in self.vision_input_names}
+    img_np = self.frames['img'].buffer_from_cl(imgs_cl['img']).reshape(self.vision_input_shapes['img'])
+    big_img_np = self.frames['big_img'].buffer_from_cl(imgs_cl['big_img']).reshape(self.vision_input_shapes['big_img'])
+
+    if prepare_only:
+      return None
+
+    # 1. Vision inference
+    self.vision_output = self._rknn.run_vision(img_np, big_img_np).reshape(-1)
+    vision_outputs_dict = self.parser.parse_vision_outputs(
+      self.slice_outputs(self.vision_output, self.vision_output_slices)
+    )
+
+    # 2. Feed hidden_state → features_buffer (same as 2-file split)
+    self.full_input_queues.enqueue({'features_buffer': vision_outputs_dict['hidden_state'], 'desire_pulse': new_desire})
+    for k in ['desire_pulse', 'features_buffer']:
+      self.numpy_inputs[k][:] = self.full_input_queues.get(k)[k]
+    self.numpy_inputs['traffic_convention'][:] = inputs['traffic_convention']
+
+    # 3. Run BOTH policy heads with the SAME features_buffer
+    self.on_policy_output = self._rknn.run_on_policy(
+      self.numpy_inputs['desire_pulse'],
+      self.numpy_inputs['traffic_convention'],
+      self.numpy_inputs['features_buffer'],
+    ).reshape(-1)
+    self.off_policy_output = self._rknn.run_off_policy(
+      self.numpy_inputs['desire_pulse'],
+      self.numpy_inputs['traffic_convention'],
+      self.numpy_inputs['features_buffer'],
+    ).reshape(-1)
+
+    # 4. Parse both heads
+    on_policy_dict = self.parser.parse_policy_outputs(
+      self.slice_outputs(self.on_policy_output, self.on_policy_output_slices)
+    )
+    off_policy_dict = self.parser.parse_policy_outputs(
+      self.slice_outputs(self.off_policy_output, self.off_policy_output_slices)
+    )
+
+    # 5. Drop off_policy's plan — on_policy plan wins (verified from sunnypilot source)
+    if 'plan' in off_policy_dict and 'plan' in on_policy_dict:
+      off_policy_dict.pop('plan', None)
+      off_policy_dict.pop('plan_stds', None)
+
+    # 6. Merge: vision outputs + off_policy perception + on_policy control
+    combined_outputs_dict = {**vision_outputs_dict, **off_policy_dict, **on_policy_dict}
+    if SEND_RAW_PRED:
+      combined_outputs_dict['raw_pred'] = np.concatenate([
+        self.vision_output.copy(), self.on_policy_output.copy(), self.off_policy_output.copy()])
+
+    return combined_outputs_dict
+
+
 def main(demo=False):
   cloudlog.warning("modeld init")
   if demo and KA2:
@@ -705,10 +863,26 @@ def main(demo=False):
   if KA2 and not USBGPU:
     set_external_cl_context(cl_context.context_ptr, cl_context.device_id_ptr, cl_context.queue_ptr)
   cloudlog.warning("CL context ready; loading model")
-  if _use_rknn_supercombo():
-    cloudlog.warning("using RKNN supercombo runner (0.11 fused model: %s)", SUPERCOMBO_RKNN_PATH.name)
-    model = ModelStateSupercomboRKNN(cl_context)
-  elif _use_rknn_driving():
+  selected = _get_selected_driving_model()
+  if _use_rknn_3split():
+    cloudlog.warning("using RKNN 3-split runner (OPM10V3: vision=%s on_policy=%s off_policy=%s)",
+                     VISION_3SPLIT_RKNN_PATH.name, ON_POLICY_RKNN_PATH.name, OFF_POLICY_RKNN_PATH.name)
+    model = ModelState3SplitRKNN(cl_context)
+  elif _use_wmi_v12():
+    # WMI v12 is a 2-file split — reuse ModelStateRKNN with WMI file names.
+    # The runner reads metadata + rknn filenames from MODEL_DIR, so we override via env.
+    os.environ['RKNN_VISION_MODEL'] = WMI_VISION_RKNN_PATH.name
+    os.environ['RKNN_POLICY_MODEL'] = WMI_POLICY_RKNN_PATH.name
+    cloudlog.warning("using RKNN driving runner with WMI v12 (vision=%s policy=%s)",
+                     WMI_VISION_RKNN_PATH.name, WMI_POLICY_RKNN_PATH.name)
+    # Reload paths after env override + point metadata to WMI files
+    global VISION_RKNN_PATH, POLICY_RKNN_PATH, VISION_METADATA_PATH, POLICY_METADATA_PATH
+    VISION_RKNN_PATH = WMI_VISION_RKNN_PATH
+    POLICY_RKNN_PATH = WMI_POLICY_RKNN_PATH
+    VISION_METADATA_PATH = WMI_VISION_METADATA_PATH
+    POLICY_METADATA_PATH = WMI_POLICY_METADATA_PATH
+    model = ModelStateRKNN(cl_context)
+  elif selected == 'default' and _use_rknn_driving():
     cloudlog.warning("using RKNN driving runner (vision=%s policy=%s); inputs cast to float16", VISION_RKNN_PATH.name, POLICY_RKNN_PATH.name)
     model = ModelStateRKNN(cl_context)
   else:

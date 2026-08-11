@@ -760,10 +760,32 @@ class ModelState3SplitRKNN:
     self._on_policy_output_size = meta['on_policy_output_size']
     self._off_policy_output_size = meta['off_policy_output_size']
 
-    from openpilot.selfdrive.modeld.runners.driving_3split_rknn import Driving3SplitRKNNRunner
-    self._rknn = Driving3SplitRKNNRunner(MODEL_DIR)
-    cloudlog.warning("modeld 3-split: using Python rknnlite runner (OPM10V3: vision=%s on_policy=%s off_policy=%s)",
-                     VISION_3SPLIT_RKNN_PATH.name, ON_POLICY_RKNN_PATH.name, OFF_POLICY_RKNN_PATH.name)
+    # Prefer C++ RKNN runner when available (no lite path).
+    # The 3-file C++ runner loads all 3 models and exposes run_off_policy().
+    self._rknn_cpp = None
+    force_rknn_python = os.getenv("RKNN_USE_PYTHON", "0") == "1"
+    if not force_rknn_python:
+      try:
+        from openpilot.selfdrive.modeld.runners.driving_rknnmodel_pyx import DrivingRKNNRunnerCpp
+        self._rknn_cpp = DrivingRKNNRunnerCpp(
+          str(VISION_3SPLIT_RKNN_PATH),
+          str(ON_POLICY_RKNN_PATH),
+          str(OFF_POLICY_RKNN_PATH),
+          vision_out_size=self._vision_output_size,
+          policy_out_size=self._on_policy_output_size,
+          off_policy_out_size=self._off_policy_output_size,
+        )
+        cloudlog.warning("modeld 3-split: using C++ runner (driving_rknnmodel_pyx) vision=%s on_policy=%s off_policy=%s",
+                         VISION_3SPLIT_RKNN_PATH.name, ON_POLICY_RKNN_PATH.name, OFF_POLICY_RKNN_PATH.name)
+      except Exception as e:
+        cloudlog.warning("modeld 3-split: C++ runner unavailable (%s), using Python rknnlite", e)
+    else:
+      cloudlog.warning("modeld 3-split: RKNN_USE_PYTHON=1, forcing Python rknnlite runner")
+    if self._rknn_cpp is None:
+      from openpilot.selfdrive.modeld.runners.driving_3split_rknn import Driving3SplitRKNNRunner
+      self._rknn = Driving3SplitRKNNRunner(MODEL_DIR)
+      cloudlog.warning("modeld 3-split: using Python rknnlite runner (OPM10V3: vision=%s on_policy=%s off_policy=%s)",
+                       VISION_3SPLIT_RKNN_PATH.name, ON_POLICY_RKNN_PATH.name, OFF_POLICY_RKNN_PATH.name)
 
     self.frames = {
       name: DrivingModelFrame(context, ModelConstants.MODEL_RUN_FREQ // ModelConstants.MODEL_CONTEXT_FREQ)
@@ -800,29 +822,45 @@ class ModelState3SplitRKNN:
     if prepare_only:
       return None
 
-    # 1. Vision inference
-    self.vision_output = self._rknn.run_vision(img_np, big_img_np).reshape(-1)
-    vision_outputs_dict = self.parser.parse_vision_outputs(
-      self.slice_outputs(self.vision_output, self.vision_output_slices)
-    )
-
-    # 2. Feed hidden_state → features_buffer (same as 2-file split)
-    self.full_input_queues.enqueue({'features_buffer': vision_outputs_dict['hidden_state'], 'desire_pulse': new_desire})
-    for k in ['desire_pulse', 'features_buffer']:
-      self.numpy_inputs[k][:] = self.full_input_queues.get(k)[k]
-    self.numpy_inputs['traffic_convention'][:] = inputs['traffic_convention']
-
-    # 3. Run BOTH policy heads with the SAME features_buffer
-    self.on_policy_output = self._rknn.run_on_policy(
-      self.numpy_inputs['desire_pulse'],
-      self.numpy_inputs['traffic_convention'],
-      self.numpy_inputs['features_buffer'],
-    ).reshape(-1)
-    self.off_policy_output = self._rknn.run_off_policy(
-      self.numpy_inputs['desire_pulse'],
-      self.numpy_inputs['traffic_convention'],
-      self.numpy_inputs['features_buffer'],
-    ).reshape(-1)
+    # 1. Vision inference + 2. Policy inference (C++ or Python path)
+    if self._rknn_cpp is not None:
+      self.vision_output = self._rknn_cpp.run_vision(img_np, big_img_np).reshape(-1)
+      vision_outputs_dict = self.parser.parse_vision_outputs(
+        self.slice_outputs(self.vision_output, self.vision_output_slices)
+      )
+      self.full_input_queues.enqueue({'features_buffer': vision_outputs_dict['hidden_state'], 'desire_pulse': new_desire})
+      for k in ['desire_pulse', 'features_buffer']:
+        self.numpy_inputs[k][:] = self.full_input_queues.get(k)[k]
+      self.numpy_inputs['traffic_convention'][:] = inputs['traffic_convention']
+      self.on_policy_output = self._rknn_cpp.run_policy(
+        self.numpy_inputs['desire_pulse'],
+        self.numpy_inputs['traffic_convention'],
+        self.numpy_inputs['features_buffer'],
+      ).reshape(-1)
+      self.off_policy_output = self._rknn_cpp.run_off_policy(
+        self.numpy_inputs['desire_pulse'],
+        self.numpy_inputs['traffic_convention'],
+        self.numpy_inputs['features_buffer'],
+      ).reshape(-1)
+    else:
+      self.vision_output = self._rknn.run_vision(img_np, big_img_np).reshape(-1)
+      vision_outputs_dict = self.parser.parse_vision_outputs(
+        self.slice_outputs(self.vision_output, self.vision_output_slices)
+      )
+      self.full_input_queues.enqueue({'features_buffer': vision_outputs_dict['hidden_state'], 'desire_pulse': new_desire})
+      for k in ['desire_pulse', 'features_buffer']:
+        self.numpy_inputs[k][:] = self.full_input_queues.get(k)[k]
+      self.numpy_inputs['traffic_convention'][:] = inputs['traffic_convention']
+      self.on_policy_output = self._rknn.run_on_policy(
+        self.numpy_inputs['desire_pulse'],
+        self.numpy_inputs['traffic_convention'],
+        self.numpy_inputs['features_buffer'],
+      ).reshape(-1)
+      self.off_policy_output = self._rknn.run_off_policy(
+        self.numpy_inputs['desire_pulse'],
+        self.numpy_inputs['traffic_convention'],
+        self.numpy_inputs['features_buffer'],
+      ).reshape(-1)
 
     # 4. Parse both heads
     on_policy_dict = self.parser.parse_policy_outputs(

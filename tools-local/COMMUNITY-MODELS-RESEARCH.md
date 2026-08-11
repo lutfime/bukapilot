@@ -346,6 +346,51 @@ Attention only appears in the small policy heads (512-dim features), which are c
 
 ---
 
+## 7.5. C++ 3-split runner (in progress, untested on device)
+
+**Problem:** OPM10V3 runs at 17 Hz through Python rknnlite — below the 20 Hz budget for blue/green.
+The 2-file models (default, WMI v12) use a C++ runner (`driving_rknnmodel_pyx.so`) that avoids
+Python/numpy per-frame overhead. The C++ runner was hardcoded for exactly 2 models — no 3rd model support.
+
+**What was done:** Extended the C++ runner to support an optional 3rd model (off_policy head):
+
+| File | Change |
+|------|--------|
+| `driving_rknnmodel.h` | Added 3-file constructor, `run_off_policy()`, `off_policy_ctx_` member, helper methods |
+| `driving_rknnmodel.cc` | Added 3-file constructor (loads 3 models), `run_policy_ctx()` shared helper, `run_off_policy()`. Existing 2-file code unchanged. |
+| `driving_rknnmodel.pxd` | Added 3-file constructor + `run_off_policy()` Cython declarations |
+| `driving_rknnmodel_pyx.pyx` | Constructor accepts optional `off_policy_path` + dynamic output sizes. Added `run_off_policy()` wrapper. **Backward compatible** — 2-arg call still works. |
+| `modeld.py` (`ModelState3SplitRKNN`) | Prefers C++ runner, falls back to Python rknnlite (same pattern as `ModelStateRKNN`) |
+| `tools-local/test_3split_cpp_vs_python.py` | 1:1 comparison harness: runs 1000 frames through both runners, compares element-by-element |
+
+**Key design decisions:**
+- The existing `ModelCtx` struct is generic — `load_model()` doesn't know if it's loading vision or policy. Extending to 3 models is copy-paste, not architecture work.
+- `on_policy` and `off_policy` share identical input contracts (desire_pulse + traffic_convention + features_buffer), so `run_policy_ctx()` is shared by both.
+- Output buffer sizes are read from metadata pkls and passed to the C++ constructor dynamically (no more hardcoded 1576/1000).
+- The `.pyx` defaults to 1576/1000 for backward compatibility with 2-file callers that don't pass sizes.
+
+**Expected performance gain (estimate, needs device benchmark):**
+- Python rknnlite: ~46ms vision + ~5ms on_policy + ~7ms off_policy = ~58ms (17 Hz)
+- C++ (estimate): ~40ms vision + ~3ms on_policy + ~3ms off_policy = ~46ms (~21 Hz)
+- The gain is from eliminating Python/numpy fp16 cast + rknnlite wrapper overhead, NOT from faster NPU compute.
+
+**Safety verification — 1:1 comparison test:**
+- NPU inference is deterministic (fixed weights, fixed math, no sampling). Same model + same input = identical output every time.
+- The test runs 1000 diverse synthetic frames (zeros, max, gradients, random noise) through both Python and C++ runners.
+- Since the C++ code path has no input-dependent branching, any bug (wrong buffer size, wrong input index, wrong format) will produce different numbers.
+- Exit code 0 = all 1000 frames match → safe to deploy.
+- The test also prints the speedup ratio.
+
+**⚠️ WARNING:** Running both Python and C++ runners in the same process loads 6 RKNN contexts
+(3 Python + 3 C++) simultaneously. On KA2 with limited NPU memory this could fail at the second
+`rknn_init`. If the test fails with a memory error, reduce `--frames` or run the two runners in
+separate processes.
+
+**Status:** Code complete, code-reviewed (1 critical bug found and fixed: `on_policy_output_` →
+`policy_output_` at `driving_rknnmodel.cc:303`). **Needs device build + test.**
+
+---
+
 ## 8. Community model reviews (from sunnypilot + Reddit)
 
 ### OPM10V3 (OP Model 10 V3)

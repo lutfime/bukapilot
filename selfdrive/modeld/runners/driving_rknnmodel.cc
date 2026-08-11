@@ -167,7 +167,32 @@ void fill_vision_input_half_from_u8(const unsigned char* src_nchw_u8, const rknn
   LOGE("Unsupported RKNN input format for vision conversion: %d", dst_attr.fmt);
   assert(false);
 }
+
 }  // namespace
+
+// =============================================================
+// Static helper: cache input indices for a policy-shaped context
+// on_policy and off_policy share the same input contract:
+// desire_pulse, traffic_convention, features_buffer.
+// =============================================================
+void DrivingRKNNModel::cache_policy_indices(ModelCtx* m) {
+  m->idx_dp = find_input_index(m->input_attrs, m->io_num.n_input, {"desire_pulse", "desire"});
+  m->idx_tc = find_input_index(m->input_attrs, m->io_num.n_input, {"traffic_convention", "traffic"});
+  m->idx_fb = find_input_index(m->input_attrs, m->io_num.n_input, {"features_buffer", "features"});
+  if (m->idx_dp < 0) m->idx_dp = 0;
+  if (m->idx_tc < 0) m->idx_tc = 1;
+  if (m->idx_fb < 0) m->idx_fb = 2;
+}
+
+// =============================================================
+// Static helper: prealloc output buffer for single-output context
+// =============================================================
+void DrivingRKNNModel::prealloc_output(ModelCtx* m, float* out_buf) {
+  assert(m->io_num.n_output == 1);
+  m->rknn_outputs[0].buf = out_buf;
+  m->rknn_outputs[0].size = m->output_attrs[0].n_elems * sizeof(float);
+  m->rknn_outputs[0].is_prealloc = 1;
+}
 
 void DrivingRKNNModel::load_model(const std::string& path, DrivingRKNNModel::ModelCtx* out) {
   std::string model_data = util::read_file(path);
@@ -216,40 +241,71 @@ void DrivingRKNNModel::load_model(const std::string& path, DrivingRKNNModel::Mod
   }
 }
 
+// =============================================================
+// 2-file constructor (vision + policy)
+// =============================================================
 DrivingRKNNModel::DrivingRKNNModel(const std::string& vision_path,
                                    const std::string& policy_path,
                                    float* vision_output,
                                    float* policy_output)
     : vision_ctx_(new ModelCtx()),
       policy_ctx_(new ModelCtx()),
+      off_policy_ctx_(nullptr),
       vision_output_(vision_output),
       policy_output_(policy_output),
+      off_policy_output_(nullptr),
       vision_run_us_(0),
-      policy_run_us_(0) {
+      policy_run_us_(0),
+      off_policy_run_us_(0) {
   load_model(vision_path, vision_ctx_);
   load_model(policy_path, policy_ctx_);
   vision_ctx_->idx_img = std::max(0, find_input_index(vision_ctx_->input_attrs, vision_ctx_->io_num.n_input, {"img"}));
   vision_ctx_->idx_big = find_input_index(vision_ctx_->input_attrs, vision_ctx_->io_num.n_input, {"big_img", "big"});
   if (vision_ctx_->idx_big < 0 || vision_ctx_->idx_big == vision_ctx_->idx_img) vision_ctx_->idx_big = (vision_ctx_->idx_img == 0) ? 1 : 0;
 
-  policy_ctx_->idx_dp = find_input_index(policy_ctx_->input_attrs, policy_ctx_->io_num.n_input, {"desire_pulse", "desire"});
-  policy_ctx_->idx_tc = find_input_index(policy_ctx_->input_attrs, policy_ctx_->io_num.n_input, {"traffic_convention", "traffic"});
-  policy_ctx_->idx_fb = find_input_index(policy_ctx_->input_attrs, policy_ctx_->io_num.n_input, {"features_buffer", "features"});
-  if (policy_ctx_->idx_dp < 0) policy_ctx_->idx_dp = 0;
-  if (policy_ctx_->idx_tc < 0) policy_ctx_->idx_tc = 1;
-  if (policy_ctx_->idx_fb < 0) policy_ctx_->idx_fb = 2;
-  // Prealloc output buffers so rknn_outputs_get writes directly (avoids extra memcpy).
-  // With want_float=1, RKNN expects size = n_elems * sizeof(float), not native tensor size.
-  assert(vision_ctx_->io_num.n_output == 1 && policy_ctx_->io_num.n_output == 1);
-  vision_ctx_->rknn_outputs[0].buf = vision_output_;
-  vision_ctx_->rknn_outputs[0].size = vision_ctx_->output_attrs[0].n_elems * sizeof(float);
-  vision_ctx_->rknn_outputs[0].is_prealloc = 1;
-  policy_ctx_->rknn_outputs[0].buf = policy_output_;
-  policy_ctx_->rknn_outputs[0].size = policy_ctx_->output_attrs[0].n_elems * sizeof(float);
-  policy_ctx_->rknn_outputs[0].is_prealloc = 1;
-  LOGD("DrivingRKNNModel: vision %u in / %u out, policy %u in / %u out\n",
+  cache_policy_indices(policy_ctx_);
+  prealloc_output(vision_ctx_, vision_output_);
+  prealloc_output(policy_ctx_, policy_output_);
+  LOGD("DrivingRKNNModel (2-file): vision %u in / %u out, policy %u in / %u out\n",
        vision_ctx_->io_num.n_input, vision_ctx_->io_num.n_output,
        policy_ctx_->io_num.n_input, policy_ctx_->io_num.n_output);
+}
+
+// =============================================================
+// 3-file constructor (vision + on_policy + off_policy)
+// =============================================================
+DrivingRKNNModel::DrivingRKNNModel(const std::string& vision_path,
+                                   const std::string& on_policy_path,
+                                   const std::string& off_policy_path,
+                                   float* vision_output,
+                                   float* on_policy_output,
+                                   float* off_policy_output)
+    : vision_ctx_(new ModelCtx()),
+      policy_ctx_(new ModelCtx()),
+      off_policy_ctx_(new ModelCtx()),
+      vision_output_(vision_output),
+      policy_output_(on_policy_output),
+      off_policy_output_(off_policy_output),
+      vision_run_us_(0),
+      policy_run_us_(0),
+      off_policy_run_us_(0) {
+  load_model(vision_path, vision_ctx_);
+  load_model(on_policy_path, policy_ctx_);         // on_policy stored in policy_ctx_
+  load_model(off_policy_path, off_policy_ctx_);
+  vision_ctx_->idx_img = std::max(0, find_input_index(vision_ctx_->input_attrs, vision_ctx_->io_num.n_input, {"img"}));
+  vision_ctx_->idx_big = find_input_index(vision_ctx_->input_attrs, vision_ctx_->io_num.n_input, {"big_img", "big"});
+  if (vision_ctx_->idx_big < 0 || vision_ctx_->idx_big == vision_ctx_->idx_img) vision_ctx_->idx_big = (vision_ctx_->idx_img == 0) ? 1 : 0;
+
+  // Both policy heads share the same input contract
+  cache_policy_indices(policy_ctx_);
+  cache_policy_indices(off_policy_ctx_);
+  prealloc_output(vision_ctx_, vision_output_);
+  prealloc_output(policy_ctx_, policy_output_);       // policy_output_ == on_policy buffer (see constructor init list)
+  prealloc_output(off_policy_ctx_, off_policy_output_);
+  LOGD("DrivingRKNNModel (3-file): vision %u in / %u out, on_policy %u in / %u out, off_policy %u in / %u out\n",
+       vision_ctx_->io_num.n_input, vision_ctx_->io_num.n_output,
+       policy_ctx_->io_num.n_input, policy_ctx_->io_num.n_output,
+       off_policy_ctx_->io_num.n_input, off_policy_ctx_->io_num.n_output);
 }
 
 DrivingRKNNModel::~DrivingRKNNModel() {
@@ -259,8 +315,12 @@ DrivingRKNNModel::~DrivingRKNNModel() {
   if (policy_ctx_ && policy_ctx_->ctx) {
     rknn_destroy(policy_ctx_->ctx);
   }
+  if (off_policy_ctx_ && off_policy_ctx_->ctx) {
+    rknn_destroy(off_policy_ctx_->ctx);
+  }
   delete vision_ctx_;
   delete policy_ctx_;
+  delete off_policy_ctx_;
 }
 
 void DrivingRKNNModel::run_vision(const unsigned char* img, const unsigned char* big_img) {
@@ -291,10 +351,9 @@ void DrivingRKNNModel::run_vision(const unsigned char* img, const unsigned char*
   // Output already in vision_output_ (is_prealloc=1)
 }
 
-void DrivingRKNNModel::run_policy(const float* desire_pulse,
-                                 const float* traffic_convention,
-                                 const float* features_buffer) {
-  ModelCtx* m = policy_ctx_;
+void DrivingRKNNModel::run_policy_ctx(ModelCtx* m, const float* desire_pulse,
+                                      const float* traffic_convention,
+                                      const float* features_buffer) {
   assert(m->io_num.n_input >= 3);
   const int idx_dp = m->idx_dp;
   const int idx_tc = m->idx_tc;
@@ -306,6 +365,25 @@ void DrivingRKNNModel::run_policy(const float* desire_pulse,
   RKNN_CHECK(rknn_run(m->ctx, NULL));
   RKNN_CHECK(rknn_outputs_get(m->ctx, m->io_num.n_output, m->rknn_outputs.data(), NULL));
   RKNN_CHECK(rknn_query(m->ctx, RKNN_QUERY_PERF_RUN, &m->perf_run, sizeof(m->perf_run)));
-  policy_run_us_ = m->perf_run.run_duration;
+}
+
+void DrivingRKNNModel::run_policy(const float* desire_pulse,
+                                 const float* traffic_convention,
+                                 const float* features_buffer) {
+  run_policy_ctx(policy_ctx_, desire_pulse, traffic_convention, features_buffer);
+  policy_run_us_ = policy_ctx_->perf_run.run_duration;
   // Output already in policy_output_ (is_prealloc=1)
+}
+
+void DrivingRKNNModel::run_off_policy(const float* desire_pulse,
+                                      const float* traffic_convention,
+                                      const float* features_buffer) {
+  if (off_policy_ctx_ == nullptr) {
+    LOGE("run_off_policy() called on a 2-file model (no off_policy context loaded)");
+    assert(false);
+    return;
+  }
+  run_policy_ctx(off_policy_ctx_, desire_pulse, traffic_convention, features_buffer);
+  off_policy_run_us_ = off_policy_ctx_->perf_run.run_duration;
+  // Output already in off_policy_output_ (is_prealloc=1)
 }

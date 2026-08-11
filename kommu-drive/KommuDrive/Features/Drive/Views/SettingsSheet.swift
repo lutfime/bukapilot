@@ -24,6 +24,7 @@ struct SettingsSheet: View {
   @State private var madsTouched: Bool = false
 
   @State private var showRebootConfirm = false
+  @State private var showCommandError = false
   @State private var showClearCacheConfirm = false
   @State private var wifiPasswordEntry: WifiNetwork? = nil
   @State private var wifiPasswordInput = ""
@@ -52,15 +53,21 @@ struct SettingsSheet: View {
         viewModel.requestVisualisation()
       }
       .onReceive(viewModel.$settings) { _ in syncToggles() }
+      // Attach each alert to a DIFFERENT view to avoid SwiftUI's single-alert-per-view conflict.
+      // Reboot confirmation goes on the List.
       .alert("Reboot device?", isPresented: $showRebootConfirm) {
         Button("Reboot", role: .destructive) {
-          viewModel.rebootDevice()
-          dismiss()
+          if viewModel.rebootDevice() {
+            dismiss()
+          } else {
+            showCommandError = true
+          }
         }
         Button("Cancel", role: .cancel) {}
       } message: {
         Text("The device will restart. This only works when openpilot is disabled.")
       }
+      // Wi-Fi forget confirmation also on the List (won't conflict — only one shows at a time).
       .alert("Forget Wi-Fi?", isPresented: $showForgetWifiConfirm) {
         Button("Forget", role: .destructive) {
           if let ssid = viewModel.settings.activeWlanSSID {
@@ -91,6 +98,15 @@ struct SettingsSheet: View {
           },
           onCancel: { wifiPasswordEntry = nil }
         )
+      }
+      // Command error alert attached to NavigationStack (separate view from List)
+      // to avoid SwiftUI's single-active-alert-per-view limitation.
+      .alert("Cannot send command", isPresented: $showCommandError) {
+        Button("OK", role: .cancel) {
+          viewModel.commandError = nil
+        }
+      } message: {
+        Text(viewModel.commandError ?? "Not connected to device")
       }
     }
   }
@@ -131,29 +147,31 @@ struct SettingsSheet: View {
   }
 
   private var drivingModelSelector: some View {
-    HStack {
-      Text("Driving Model")
-      Spacer()
-      Menu {
-        ForEach(viewModel.settings.availableDrivingModels, id: \.self) { model in
-          Button {
-            selectModel(model)
-          } label: {
-            HStack {
-              Text(modelDisplayName(model))
-              if selectedDrivingModel == model { Image(systemName: "checkmark") }
+    Menu {
+      ForEach(viewModel.settings.availableDrivingModels, id: \.self) { model in
+        Button {
+          selectModel(model)
+        } label: {
+          HStack {
+            Text(modelDisplayName(model))
+            if selectedDrivingModel == model {
+              Image(systemName: "checkmark")
             }
           }
         }
-      } label: {
-        HStack(spacing: 4) {
-          Text(modelDisplayName(selectedDrivingModel))
-            .foregroundStyle(.primary)
-          Image(systemName: "chevron.up.chevron.down")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-        }
       }
+    } label: {
+      HStack {
+        Text("Driving Model")
+          .foregroundStyle(.primary)
+        Spacer()
+        Text(modelDisplayName(selectedDrivingModel))
+          .foregroundStyle(.secondary)
+        Image(systemName: selectedDrivingModel != "default" ? "checkmark.circle.fill" : "chevron.up.chevron.down")
+          .font(.caption)
+          .foregroundStyle(selectedDrivingModel != "default" ? Color.accentColor : Color.secondary)
+      }
+      .contentShape(Rectangle())
     }
   }
 

@@ -196,6 +196,26 @@ final class BLEManager: NSObject {
     disconnect()
   }
 
+  /// Verify the connection is actually alive. iOS doesn't always fire
+  /// didDisconnectPeripheral when backgrounding — the peripheral can silently
+  /// disconnect while our connectionState still says .connected.
+  /// Returns true if genuinely connected, false if stale (and fixes state).
+  @discardableResult
+  func verifyConnection() -> Bool {
+    if let p = connectedPeripheral, p.state == .connected {
+      return true
+    }
+    // Stale — fix it
+    if connectionState.isConnected {
+      AppLog.warn("verifyConnection: stale .connected, peripheral state=\(connectedPeripheral?.state.rawValue ?? -1)")
+      connectedPeripheral = nil
+      rxChar = nil
+      txChar = nil
+      DispatchQueue.main.async { self.connectionState = .disconnected }
+    }
+    return false
+  }
+
   /// Disconnect the current peripheral.
   func disconnect() {
     if let p = connectedPeripheral {
@@ -217,6 +237,15 @@ final class BLEManager: NSObject {
   func send(_ data: Data, channel: UInt8 = 0x02) {
     guard let p = connectedPeripheral, let rx = rxChar else {
       AppLog.warn("send: not connected / RX char missing")
+      return
+    }
+
+    // If the peripheral is actually disconnected (iOS didn't fire the callback
+    // yet — common after backgrounding), fix the stale state and bail.
+    if p.state != .connected {
+      AppLog.warn("send: peripheral state is \(p.state.rawValue), fixing stale connectionState")
+      DispatchQueue.main.async { self.connectionState = .disconnected }
+      scheduleReconnect()
       return
     }
 

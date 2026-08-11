@@ -48,6 +48,7 @@ final class DriveSessionViewModel: ObservableObject {
   @Published var showAllDevices: Bool = false
   @Published private(set) var autoReconnectEnabled: Bool = false
   @Published private(set) var reconnectTimedOut: Bool = false
+  @Published var commandError: String?
 
   // MARK: Internals
 
@@ -125,8 +126,8 @@ final class DriveSessionViewModel: ObservableObject {
   /// Called when the app returns to the foreground. iOS drops BLE connections
   /// shortly after backgrounding, so we need to reconnect or rescan every time.
   func handleAppBecameActive() {
-    if connectionState.isConnected {
-      // Still connected (fast background cycle) — re-request visualisation.
+    if ble.verifyConnection() {
+      // Still genuinely connected (fast background cycle) — re-request visualisation.
       requestVisualisation()
     } else if ble.autoReconnectEnabled {
       // Was connected before, now dropped — try auto-reconnect.
@@ -279,8 +280,15 @@ final class DriveSessionViewModel: ObservableObject {
   }
 
   /// Reboot the device. Only acts when openpilot is disabled.
-  func rebootDevice() {
+  /// Returns false if BLE not connected (caller should show error).
+  @discardableResult
+  func rebootDevice() -> Bool {
+    guard ble.verifyConnection() else {
+      commandError = "Not connected to device via Bluetooth"
+      return false
+    }
     sendCommand(["msgType": "reboot"])
+    return true
   }
 
   /// Reset calibration (clears CalibrationParams, LiveParameters, etc.).

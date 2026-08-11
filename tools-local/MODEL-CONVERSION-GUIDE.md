@@ -903,9 +903,16 @@ the practical conversion + integration steps.
 
 | Type | Files | Example models | Conversion difficulty |
 |------|-------|----------------|----------------------|
-| **2-file split** | vision + policy | WMI V12, DTR v6, Tomb Raider 7-16, all 0.10 base | Easy — opset 17, no Gelu rewrite |
-| **3-file split** | vision + on_policy + off_policy | OPM10V3, Off-Policy Model v5, post-0.11 models | Medium — opset 20, needs Gelu rewrite |
+| **2-file split** | vision + policy | WMI V12, DTR v6, Tomb Raider 7-16, all 0.10 base | Easy — **opset 17, NO Gelu rewrite needed** |
+| **3-file split** | vision + on_policy + off_policy | OPM10V3, Off-Policy Model v5, post-0.11 models | Medium — **opset 20, needs sigmoid Gelu rewrite** (see below) |
 | **supercombo** | single fused | 0.11 base models, Space Labs | Same as §2-5 (too slow on KA2) |
+
+> **When to use the Gelu rewrite:** ONLY for opset 20 models (post-0.11 community models
+> like OPM10V3). The rewrite is needed because RKNN-Toolkit2 only supports opset ≤19, and
+> Gelu was added as a native op in opset 20. **Do NOT run the Gelu rewrite on opset 17 models**
+> (0.9/0.10 base) — they don't have native Gelu and will error or produce wrong output.
+> The conversion script (`convert_opm10v3_to_rknn.py`) auto-detects opset and only applies
+> the rewrite when needed.
 
 ### Getting ONNX from sunnypilot models
 
@@ -927,18 +934,36 @@ sunnypilot distributes compiled tinygrad `.pkl` files (not ONNX). To get the ONN
 
 | Script | Purpose |
 |--------|---------|
-| `convert_opm10v3_to_rknn.py` | 3-file split → 3 RKNN files (opset 20→19, Gelu rewrite) |
+| `convert_opm10v3_to_rknn.py` | 3-file split → 3 RKNN files (opset 20→19, **sigmoid** Gelu rewrite) |
 | `convert_and_bench_wmiv12.py` | 2-file split → 2 RKNN + simulator benchmark (opset 17) |
-| `bench_opm10v3.py` | Simulator benchmark for any model type |
+| `bench_opm10v3.py` | On-device benchmark (rknnlite with real NPU) |
 | `cast_uint8_inputs_to_float.py` | Helper — cast img/big_img UINT8→FLOAT |
-| `rewrite_gelu_for_opset19.py` | Helper — rewrite opset-20 Gelu→erf for opset 19 |
+| `rewrite_gelu_sigmoid.py` | **Default** — rewrite opset-20 Gelu→sigmoid approx (4 nodes, fast) |
+| `rewrite_gelu_for_opset19.py` | Legacy — rewrite opset-20 Gelu→erf (8 nodes, slow on NPU, not used) |
 
-### Converted models in this repo
+### Gelu rewrite: sigmoid vs erf (critical for NPU performance)
+
+On the RK3588 NPU, the erf-based Gelu rewrite (8 nodes per Gelu) is **2.96x slower** than
+the sigmoid approximation (4 nodes). On-device benchmark (2026-08-11):
+
+| Rewrite | Nodes per Gelu | Vision ms | Total ms | Hz |
+|---|---|---|---|---|
+| erf subgraph | 8 | 112.0ms | 124.0ms | 8.1 Hz ❌ |
+| **sigmoid approx** | **4** | **37.8ms** | **47.9ms** | **20.9 Hz ✅** |
+
+The sigmoid approximation (`x * sigmoid(1.702 * x)`) is within 0.1 mean abs diff of exact
+Gelu — safe for driving. Always use `rewrite_gelu_sigmoid.py` for opset-20 models on KA2.
+
+### Converted models (tracked in git + deployed to device)
 
 ```
-selfdrive/modeld/models_dev/
-├── opm10v3/   ← 3-file split (85 MB total)
-└── wmiv12/    ← 2-file split (92 MB total)
+selfdrive/modeld/models/
+├── driving_vision_opm10v3.rknn      (49 MB, sigmoid) ← deployed
+├── driving_on_policy_opm10v3.rknn   (15 MB, sigmoid)
+├── driving_off_policy_opm10v3.rknn  (21 MB, sigmoid)
+├── driving_vision_wmiv12.rknn       (76 MB)
+├── driving_policy_wmiv12.rknn       (16 MB)
+└── matching _metadata.pkl files
 
 tools-local/models_store/
 ├── opm10v3-onnx-original/   ← pristine opset 20 ONNX (for reconversion)

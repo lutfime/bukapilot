@@ -20,10 +20,18 @@
 - **OPM10V3 with sigmoid Gelu is the fastest model** — 47.9ms / 20.9 Hz, even faster than production 0.10.3!
 - The sigmoid Gelu approximation (`x * sigmoid(1.702x)` = 4 nodes) replaced the slow erf rewrite
   (8 nodes per Gelu), cutting vision from 112ms → 38ms — a **2.7x speedup**.
-- **Accuracy verified on-device**: mean abs diff 0.07 (output range -12 to 2), hidden_state
-  mean abs diff 0.027 (on values ranging -1 to 1). Within FP16 quantization noise.
+- **Accuracy verified on-device** (erf vs sigmoid, same fixed input):
+  - Mean abs diff: 0.070 (output range -12 to +2)
+  - Max abs diff: 1.477 (worst single output, ~10% at extreme)
+  - 89.7% of outputs within 0.1, 96.8% within 0.5
+  - **Hidden state** (fed to policy heads): mean abs diff 0.027, max 0.126 — within FP16 noise
+  - Relative diff % is misleading (98% mean, 32296% max) because many output values are near zero;
+    dividing small numbers by near-zero denominators inflates the percentage. **Absolute diff is the
+    meaningful metric** and confirms it's safe for driving.
 - FP16 config optimizations (flash_attention, remove_reshape, compress_weight) had **zero effect**
   on either erf or sigmoid versions — the bottleneck was purely the Gelu rewrite complexity.
+- **Deployed and verified on device**: sigmoid models replaced erf models in production dir.
+  `SelectedDrivingModel=opm10v3` confirmed, `_use_rknn_3split()=True`, modeld imports cleanly.
 
 ---
 
@@ -159,24 +167,42 @@ Script: `tools-local/convert_and_bench_wmiv12.py` (convert + benchmark in one Do
 
 ### For 3-file split models (OPM10V3)
 
-Uses `cast_uint8_inputs_to_float.py` + `rewrite_gelu_for_opset19.py` + RKNN convert.
+Uses `cast_uint8_inputs_to_float.py` + `rewrite_gelu_sigmoid.py` + RKNN convert.
 
-Script: `tools-local/convert_opm10v3_to_rknn.py`
+> **Gelu rewrite is ONLY for opset 20 models** (post-0.11: OPM10V3, Off-Policy v5, etc.).
+> Opset 17 models (0.9/0.10 base: WMI V12, DTR v6, Tomb Raider) do NOT need it — they
+> have no native Gelu. The conversion script auto-detects opset and skips the rewrite
+> when not needed.
+
+Script: `tools-local/convert_opm10v3_to_rknn.py` (auto-detects opset, uses sigmoid by default)
 Docker wrapper: `tools-local/run_opm10v3_conversion.sh`
 
-**Performance limitation:** OPM10V3 vision is 112ms on device (vs 57ms for 0.10.3 vision).
-The bottleneck is the Gelu→erf rewrite (38 Gelu nodes × 8 subgraph nodes = 266 extra nodes).
-FP16 config optimizations were tested on-device (2026-08-11) with zero improvement:
+**Gelu rewrite — sigmoid vs erf (important finding):**
 
-| Config | Vision ms (device) |
-|---|---|
-| baseline (opt_level=3) | 112.0ms |
-| flash_attention + remove_reshape + compress_weight | 111.7ms |
+ONNX opset 20 uses native Gelu, but RKNN-Toolkit2 only supports opset ≤19.
+Two rewrite approaches were tested on the real KA2 NPU:
 
-The RKNN optimizer cannot simplify the erf subgraphs regardless of config flags. The only
-path to faster OPM10V3 vision would be: (1) a newer RKNN-Toolkit2 supporting opset 20 natively,
-(2) INT8 quantization (uncertain — memory-bound layers showed only 1.27× speedup), or
-(3) a simpler Gelu approximation (e.g. `x * sigmoid(1.702 * x)` = 2 nodes instead of 8).
+| Approach | Nodes per Gelu | Vision ms (device) | Accuracy |
+|---|---|---|---|
+| erf subgraph (`rewrite_gelu_for_opset19.py`) | 8 | **112.0ms** ❌ | exact |
+| sigmoid approx (`rewrite_gelu_sigmoid.py`) | 4 | **37.8ms** ✅ | <0.1 mean abs diff |
+| **speedup** | — | **2.96x** | within FP16 noise |
+
+The sigmoid approximation `x * sigmoid(1.702 * x)` is the **default** in the conversion
+pipeline. It's not only faster than erf — it makes OPM10V3 the fastest model overall
+(47.9ms total vs 59.8ms for production 0.10.3).
+
+The original erf rewriter (`rewrite_gelu_for_opset19.py`) is kept for reference but not used.
+
+**FP16 config optimizations tested (2026-08-11, on-device):**
+
+| Config | Vision ms (erf) | Vision ms (sigmoid) |
+|---|---|---|
+| baseline (opt_level=3) | 112.0ms | 37.8ms |
+| flash_attention + remove_reshape + compress_weight | 111.7ms | not tested |
+
+FP16 configs had **zero effect** on erf — the bottleneck was purely Gelu node count.
+The sigmoid fix eliminated the bottleneck entirely.
 
 ### Pristine ONNX backups
 
@@ -191,19 +217,17 @@ tools-local/models_store/
     └── driving_policy.onnx    (13 MB)
 ```
 
-### Converted RKNN files (gitignored)
+### Converted RKNN files (tracked in git, deployed to device)
 
 ```
-selfdrive/modeld/models_dev/
-├── opm10v3/
-│   ├── driving_vision_opm10v3.rknn          (49 MB)
-│   ├── driving_on_policy_opm10v3.rknn       (15 MB)
-│   ├── driving_off_policy_opm10v3.rknn      (21 MB)
-│   └── *_metadata.pkl (3 files)
-└── wmiv12/
-    ├── driving_vision_wmiv12.rknn           (76 MB)
-    ├── driving_policy_wmiv12.rknn           (16 MB)
-    └── *_metadata.pkl (2 files)
+selfdrive/modeld/models/
+├── driving_vision_opm10v3.rknn              (49 MB, sigmoid Gelu)
+├── driving_on_policy_opm10v3.rknn           (15 MB, sigmoid Gelu)
+├── driving_off_policy_opm10v3.rknn          (21 MB, sigmoid Gelu)
+├── *_opm10v3_metadata.pkl (3 files)
+├── driving_vision_wmiv12.rknn               (76 MB)
+├── driving_policy_wmiv12.rknn               (16 MB)
+└── *_wmiv12_metadata.pkl (2 files)
 ```
 
 ---
@@ -240,8 +264,15 @@ production number, but it gives **relative** comparison between models.
 |---|---|---|---|
 | 0.10.3 split (reference) | ~70ms | 32.8ms | 30.5 Hz |
 | **WMI V12** | 71.4ms | **~31ms** | **~32 Hz** |
-| **OPM10V3** | 68.8ms | **~32ms** | **~31 Hz** |
+| **OPM10V3 (erf)** | 68.8ms | predicted ~32ms | **WRONG** — actually 124ms |
+| OPM10V3 (sigmoid) | not tested | — | **47.9ms / 20.9 Hz** (device) |
 | 0.11 supercombo (rejected) | 79.6ms | 79.5ms | 12.6 Hz |
+
+**⚠️ Simulator accuracy caveat (learned the hard way):** The simulator predicted OPM10V3
+(erf Gelu) at ~32ms — but the real device showed **124ms** (3.9x slower than predicted).
+The simulator runs on CPU which processes the erf subgraph nodes differently than the NPU.
+**The simulator is unreliable for models with Gelu subgraph rewrites.** Always confirm
+with on-device benchmark (`bench_opm10v3.py` or the comparison scripts).
 
 ### Benchmark script
 

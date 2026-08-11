@@ -199,7 +199,10 @@ def init_overlay() -> None:
 
   git_diff = run(["git", "diff", "--submodule=diff"], OVERLAY_MERGED)
   params.put("GitDiff", git_diff)
-  cloudlog.info(f"git diff output:\n{git_diff}")
+  # Truncate for cloudlog: the full diff is sent through msgq, and a large diff (100s of KB from
+  # local tuning modifications) exceeds the msgq log queue size -> msgq_msg_send assertion ->
+  # logmessaged SIGABRT -> "process error" + can't engage. Full diff is still in the GitDiff param.
+  cloudlog.info(f"git diff output ({len(git_diff)}B, truncated):\n{git_diff[:2048]}")
 
 
 def finalize_update() -> None:

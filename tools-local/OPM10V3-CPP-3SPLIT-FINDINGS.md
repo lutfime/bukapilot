@@ -9,10 +9,16 @@
   (all-zero inputs) matches Python **bit-exact**, but any real (non-zero) input makes
   `on_policy`/`off_policy` output `inf` (or wrong). Python rknnlite is correct for the same
   models, so the `.rknn` files are fine.
-- **Root cause = NPU multi-context corruption.** Running the **vision** context corrupts the
-  **policy** contexts' NPU state (the policy then ignores its `features_buffer` input; inf is
-  non-deterministic across runs). This is a property of running 3 rknn contexts through the **C
-  API**; Python rknnlite does not hit it.
+- **Root cause = NPU multi-context corruption (core-INDEPENDENT).** Running the **vision**
+  context corrupts the **policy** contexts' NPU state (the policy then ignores its
+  `features_buffer` input; inf is non-deterministic across runs). This is a property of running
+  3 rknn contexts through the **C API**; Python rknnlite does not hit it.
+- **UPDATE — per-context core isolation did NOT fix it (commit 3455338, tested 2026-08-11).**
+  Distributing the 3 contexts across all 3 NPU cores (vision→core 2, on_policy→core 0,
+  off_policy→core 1) produced the **identical** failure: 1:1 test still frame-0-exact then inf,
+  diag still shows vision-pollutes-policy (A=finite, B=inf+fb-ignored). So the corruption is via
+  **shared NPU memory/state that `rknn_set_core_mask` does NOT isolate** — not a per-core
+  collision. Strongly suggests the 3 rknn contexts share an NPU memory pool regardless of core.
 - **Device-only bug.** It cannot be reproduced on Mac (see below).
 
 ---
@@ -74,26 +80,35 @@ It prints, for identical inputs:
 - Non-deterministic across runs → NPU resource/timing collision, not a deterministic logic bug.
 
 ## Ruled out (all attempted, none fixed it)
-- NPU core mask: pinned policy heads to core 0 (`RKNN_3SPLIT_POLICY_CORE_MASK`), also tried
-  all-core-0 (`RKNN_DRIVING_CORE_MASK=0`). The earlier "core 0 works" was a **red herring** — it
-  only worked because the test used zero inputs.
+- NPU core mask — ALL variants:
+  - Single core for policy (`RKNN_3SPLIT_POLICY_CORE_MASK=0`), and all-core-0
+    (`RKNN_DRIVING_CORE_MASK=0`). "core 0 works" was a **red herring** (zero inputs only).
+  - **Per-context isolation (commit 3455338): vision→2, on_policy→0, off_policy→1.** Tested
+    2026-08-11 — **identical failure** (frame 0 exact, frame 1+ inf; diag A=finite, B=inf). So
+    `rknn_set_core_mask` does NOT isolate the contexts. The corruption is via shared NPU
+    memory/state, not a per-core collision.
 - Missing `rknn_outputs_release()` between frames: added to `run_vision` + `run_policy_ctx`
   (standard RKNN pattern). No effect on the inf.
 - Python runner context contention in the test: the test now `release()`s the 3 Python RKNNLite
   contexts before loading the C++ runner. Bug persists with only 3 C++ contexts.
 
 ## Next angles for whoever picks this up
-1. **Per-context NPU memory isolation.** Investigate whether `rknn_init` for the 3 contexts
-   shares/overlaps NPU memory. Try `rknn_set_core_mask` per-context at **init** with distinct
-   cores (vision=2, on_policy=0, off_policy=1) — note dmonitoringmodeld uses cores 0+1, so check
-   contention.
-2. **Explicit sync/barrier** between `run_vision` and `run_policy` (the C API `rknn_run` is
-   synchronous, but the NPU may pipeline across contexts).
-3. **Is the 3-split even viable via the C API on this NPU?** Python rknnlite (used by the
-   fallback) works, so the models run fine on the NPU — the issue is specific to the C runner
-   holding 3 contexts. Consider keeping opm10v3 on the **Python rknnlite** runner (correct but
-   ~17 Hz → blue/no-engage on KA2) unless the C collision is solved, OR re-quantize to a 2-file
-   layout so it can use the proven 2-file C path.
+Core isolation is EXHAUSTED. The remaining plausible causes are shared NPU **memory** (not cores):
+1. **Shared NPU memory pool.** `rknn_init` for the 3 contexts likely shares/resuses NPU
+   internal memory (weights/activations) regardless of core. Look for an rknn flag/option for
+   per-context memory isolation, or allocate contexts so they don't share. Check the RKNN API
+   (`rknn_init` flags, `rknn_set_mem_pool`) for isolation. Verify `rknn_set_core_mask` is even
+   honored on this librknnrt (it may be a no-op).
+2. **Process-level isolation.** Run the 3 contexts in separate processes (or at least the vision
+   in its own). Big architecture change, but it's how Python rknnlite avoids the issue (it
+   effectively serializes/owns contexts differently).
+3. **Explicit sync/barrier** between `run_vision` and `run_policy` (rknn_run is synchronous, but
+   the NPU may pipeline across contexts — try `rknn_query(RKNN_QUERY_PERF_RUN)` or a dummy
+   rknn_run as a barrier).
+4. **Fallback / re-architect.** Python rknnlite works but is ~17 Hz → blue on KA2. If the C
+   collision can't be solved, the realistic options are: keep opm10v3 on Python (too slow), or
+   **re-quantize opm10v3 into a 2-file (vision+policy) layout** so it can use the proven,
+   un-buggy 2-file C path.
 
 ## Build/test quick reference (device)
 - Rebuild .so: see step 1 (stub certs + venv scons).

@@ -13,6 +13,7 @@ Requires the new driving_rknnmodel_pyx.so (built with the 3-file C++ runner, com
 import sys
 import numpy as np
 from pathlib import Path
+sys.path.insert(0, "/data/openpilot")  # so `openpilot...` imports resolve when run from anywhere
 from openpilot.selfdrive.modeld.runners.driving_rknnmodel_pyx import DrivingRKNNRunnerCpp
 
 MD = Path("/data/openpilot/selfdrive/modeld/models")

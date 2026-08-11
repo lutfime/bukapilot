@@ -108,22 +108,83 @@ It prints, for identical inputs:
   inf 2/5 → **not** multi-context/vision-pollution; the inf is in on_policy+C API itself.
 
 ## Next angles for whoever picks this up
-Core isolation is EXHAUSTED. The remaining plausible causes are shared NPU **memory** (not cores):
-1. **Shared NPU memory pool.** `rknn_init` for the 3 contexts likely shares/resuses NPU
-   internal memory (weights/activations) regardless of core. Look for an rknn flag/option for
-   per-context memory isolation, or allocate contexts so they don't share. Check the RKNN API
-   (`rknn_init` flags, `rknn_set_mem_pool`) for isolation. Verify `rknn_set_core_mask` is even
-   honored on this librknnrt (it may be a no-op).
-2. **Process-level isolation.** Run the 3 contexts in separate processes (or at least the vision
-   in its own). Big architecture change, but it's how Python rknnlite avoids the issue (it
-   effectively serializes/owns contexts differently).
-3. **Explicit sync/barrier** between `run_vision` and `run_policy` (rknn_run is synchronous, but
-   the NPU may pipeline across contexts — try `rknn_query(RKNN_QUERY_PERF_RUN)` or a dummy
-   rknn_run as a barrier).
-4. **Fallback / re-architect.** Python rknnlite works but is ~17 Hz → blue on KA2. If the C
-   collision can't be solved, the realistic options are: keep opm10v3 on Python (too slow), or
-   **re-quantize opm10v3 into a 2-file (vision+policy) layout** so it can use the proven,
-   un-buggy 2-file C path.
+
+### Root cause research (web search, 2026-08-12)
+
+The inf is likely **fp16 overflow** in the sigmoid Gelu rewrite, confirmed by multiple sources:
+- [Rockchip RKNPU User Guide](https://www.scribd.com/document/774992182): "if simulator_error shows inf, it's typically FP16 overflow"
+- [GitHub #558](https://github.com/airockchip/rknn-toolkit2/issues/558): librknnrt v2.3.2 C API has bugs where "Python API uses a different code path that bypasses the bug"
+- [SHARD paper (ACM)](https://dl.acm.org/doi/pdf/10.1145/3805621.3807618): documents NaN/Inf on Rockchip NPUs, proposes activation rescaling
+
+The sigmoid Gelu approximation does `1.702 * x` before Sigmoid. In fp16, if `x > ~38,500`,
+`1.702 * x` exceeds fp16 max (65504) → `inf`. The C API propagates this inf; rknnlite doesn't
+(different internal code path per Rockchip's own admission).
+
+**Caveat:** the inf is non-deterministic (2/5 runs, same input), which doesn't perfectly match
+deterministic fp16 overflow. This suggests there may be an ADDITIONAL librknnrt initialization
+bug. But fixing the overflow is the cheapest first step.
+
+### Fix A: Clip before multiply (IMPLEMENTED, needs device test)
+
+**Status: code complete in `tools-local/rewrite_gelu_sigmoid.py`, needs reconvert + test.**
+
+Added a `Clip(-100, +100)` node before the `1.702 * x` multiply. This prevents the intermediate
+from ever exceeding fp16 range. Zero accuracy impact — sigmoid(1.702 * 100) = 1.0, so Gelu(100)
+= 100 * 1.0 = 100, identical to unclipped result. The clip only affects values that would overflow
+fp16 anyway.
+
+```
+Old (4 nodes, overflows): x → Mul(x, 1.702) → Sigmoid → Mul(x, sig)
+New (5 nodes, fp16-safe): x → Clip(±100) → Mul(1.702) → Sigmoid → Mul(x, sig)
+```
+
+Note: the final `Mul` uses the ORIGINAL x (not clipped), so the asymptotic behavior is correct.
+
+**To test:**
+1. Restore the original on_policy ONNX from `tools-local/models_store/opm10v3-onnx-original/`
+2. Re-run conversion: `python3 tools-local/convert_opm10v3_to_rknn.py` (converts all 3, or comment
+   out vision + off_policy in the MODELS list to convert on_policy only)
+3. Push new `driving_on_policy_opm10v3.rknn` to device
+4. Run the hybrid test: `python3 tools-local/test_3split_cpp_vs_python.py --frames 100`
+5. If all frames pass → C++ 2-file hybrid works with clipped on_policy
+
+**If Fix A doesn't work** (inf persists despite Clip), the cause is NOT overflow but a deeper
+librknnrt Sigmoid-op bug. Proceed to Fix B.
+
+### Fix B: erf Gelu for on_policy only (NOT YET TRIED)
+
+If Fix A fails, switch on_policy to the erf Gelu rewrite. This uses completely different ONNX ops
+(`Erf + Add + Mul` instead of `Sigmoid + Mul`), avoiding whatever C API code path is buggy.
+
+The erf rewriter already exists: `tools-local/rewrite_gelu_for_opset19.py` (legacy, not used).
+It produces 8 nodes per Gelu (slower) but the on_policy model is small (~5ms), so the overhead
+is acceptable (~15ms instead of ~5ms).
+
+**To try:**
+1. Copy `tools-local/rewrite_gelu_for_opset19.py` to `tools-local/rewrite_gelu_erf.py`
+2. Restore the original on_policy ONNX
+3. Modify `convert_opm10v3_to_rknn.py` to call `rewrite_gelu_erf.py` instead of
+   `rewrite_gelu_sigmoid.py` for on_policy only (add a per-model `gelu_rewriter` field)
+4. Convert + test same as Fix A
+
+Vision stays on sigmoid (it works in C++ already). off_policy stays on sigmoid (Python only).
+
+### Fix C: newer librknnrt.so (not yet investigated)
+
+The `rockchip-linux/rknpu2` repo is "no longer maintained" and moved to
+[airockchip/rknn-toolkit2](https://github.com/airockchip/rknn-toolkit2). A newer librknnrt.so
+may fix the C API bugs (v2.3.2 has confirmed bugs per GitHub #558).
+
+Check the device: `strings /usr/lib/librknnrt.so | grep -i version`
+Compare with latest from airockchip repo.
+**WARNING:** replacing librknnrt.so is a system-level change that could break default/WMI models.
+Test thoroughly before deploying.
+
+### Previous angles (all exhausted)
+1. ~~Shared NPU memory pool~~ — per-core isolation tested, didn't help
+2. ~~Process-level isolation~~ — hybrid C++/Python tested, on_policy alone still inf
+3. ~~Explicit sync/barrier~~ — rknn_run is synchronous, no pipelining issue
+4. ~~Multi-context collision~~ — disproved by hybrid test (on_policy alone, 1 C context, still inf)
 
 ## Build/test quick reference (device)
 - Rebuild .so: see step 1 (stub certs + venv scons).

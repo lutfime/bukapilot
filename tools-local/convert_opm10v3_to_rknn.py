@@ -80,8 +80,11 @@ def cast_uint8_inputs(onnx_path: Path):
 
 def downconvert_opset_if_needed(onnx_path: Path, max_opset: int = 19):
   """RKNN-Toolkit2 v2.3.2 supports ONNX opset <= 19; OPM10V3 models are opset 20.
-  Uses the sigmoid approximation (rewrite_gelu_sigmoid.py) — 4 nodes per Gelu vs 8 for erf.
-  On KA2 NPU this is 2.7x faster (112ms→41ms vision) with negligible accuracy loss (<0.1 mean abs diff)."""
+  Uses the clipped sigmoid approximation (rewrite_gelu_sigmoid.py) — 5 nodes per Gelu
+  (Clip + Mul + Sigmoid + Mul + consts) vs 8 for erf.
+  The Clip prevents fp16 overflow in the 1.702*x intermediate (suspected root cause of
+  the C API inf bug). On KA2 NPU sigmoid is 2.7x faster than erf (112ms→41ms vision)
+  with negligible accuracy loss (<0.1 mean abs diff)."""
   m = onnx.load(str(onnx_path))
   current = max((o.version for o in m.opset_import), default=0)
   if current <= max_opset:
@@ -163,9 +166,10 @@ def convert_one(cfg: dict):
   if cfg["cast_uint8"]:
     cast_uint8_inputs(onnx_path)
 
-  # Step 3: rewrite Gelu using sigmoid approximation + downconvert opset 20 -> 19
-  # The sigmoid approximation (x * sigmoid(1.702x)) is 4 nodes per Gelu vs 8 for erf.
-  # On the KA2 NPU, this is 2.7x faster (112ms → 41ms for vision) with negligible accuracy loss.
+  # Step 3: rewrite Gelu using clipped sigmoid approximation + downconvert opset 20 -> 19
+  # The clipped sigmoid (x * sigmoid(1.702 * clip(x, ±100))) is 5 nodes per Gelu.
+  # The Clip prevents fp16 overflow that causes inf in the C API (librknnrt v2.3.2 bug).
+  # On the KA2 NPU, sigmoid is 2.7x faster than erf (112ms → 41ms for vision).
   downconvert_opset_if_needed(onnx_path, max_opset=19)
 
   # Step 4: RKNN convert

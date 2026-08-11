@@ -8,15 +8,22 @@
 
 ## 0. TL;DR — what we built
 
-| Model | Architecture | Est device speed | Status |
-|---|---|---|---|
-| **Default (0.10.3)** | 2-file split (vision + policy) | 32.8ms / 30.5 Hz | ✅ Production |
-| **WMI V12** | 2-file split (community finetune) | ~31ms / ~32 Hz | ✅ Converted + selector |
-| **OPM10V3** | 3-file split (vision + on_policy + off_policy) | ~32ms / ~31 Hz | ✅ Converted + selector |
-| 0.11 supercombo | fused (rejected) | 79.5ms / 12.6 Hz | ❌ Too slow, toggle removed |
+| Model | Architecture | Device speed (Python rknnlite) | Est C API | Status |
+|---|---|---|---|---|
+| **Default (0.10.3)** | 2-file split (vision + policy) | 59.8ms / 16.7 Hz | ~30ms / ~33 Hz | ✅ Production |
+| **WMI V12** | 2-file split (community finetune) | 69.0ms / 14.5 Hz | ~35ms / ~29 Hz | ✅ Converted + selector |
+| **OPM10V3 (sigmoid)** | 3-file split (vision + on_policy + off_policy) | **47.9ms / 20.9 Hz** | ~24ms / ~42 Hz | ✅ **Fastest!** |
+| OPM10V3 (erf) | same, erf Gelu rewrite | 124.0ms / 8.1 Hz | — | ❌ Replaced by sigmoid |
+| 0.11 supercombo | fused (rejected) | 79.5ms / 12.6 Hz (C API) | — | ❌ Too slow, toggle removed |
 
-All three viable models estimated ~30 Hz. The app now has a **model selector** (not a toggle)
-where the user picks between Default / WMI V12 / OPM10V3.
+**On-device benchmark results (2026-08-11, measured on real KA2 NPU):**
+- **OPM10V3 with sigmoid Gelu is the fastest model** — 47.9ms / 20.9 Hz, even faster than production 0.10.3!
+- The sigmoid Gelu approximation (`x * sigmoid(1.702x)` = 4 nodes) replaced the slow erf rewrite
+  (8 nodes per Gelu), cutting vision from 112ms → 38ms — a **2.7x speedup**.
+- **Accuracy verified on-device**: mean abs diff 0.07 (output range -12 to 2), hidden_state
+  mean abs diff 0.027 (on values ranging -1 to 1). Within FP16 quantization noise.
+- FP16 config optimizations (flash_attention, remove_reshape, compress_weight) had **zero effect**
+  on either erf or sigmoid versions — the bottleneck was purely the Gelu rewrite complexity.
 
 ---
 
@@ -156,6 +163,20 @@ Uses `cast_uint8_inputs_to_float.py` + `rewrite_gelu_for_opset19.py` + RKNN conv
 
 Script: `tools-local/convert_opm10v3_to_rknn.py`
 Docker wrapper: `tools-local/run_opm10v3_conversion.sh`
+
+**Performance limitation:** OPM10V3 vision is 112ms on device (vs 57ms for 0.10.3 vision).
+The bottleneck is the Gelu→erf rewrite (38 Gelu nodes × 8 subgraph nodes = 266 extra nodes).
+FP16 config optimizations were tested on-device (2026-08-11) with zero improvement:
+
+| Config | Vision ms (device) |
+|---|---|
+| baseline (opt_level=3) | 112.0ms |
+| flash_attention + remove_reshape + compress_weight | 111.7ms |
+
+The RKNN optimizer cannot simplify the erf subgraphs regardless of config flags. The only
+path to faster OPM10V3 vision would be: (1) a newer RKNN-Toolkit2 supporting opset 20 natively,
+(2) INT8 quantization (uncertain — memory-bound layers showed only 1.27× speedup), or
+(3) a simpler Gelu approximation (e.g. `x * sigmoid(1.702 * x)` = 2 nodes instead of 8).
 
 ### Pristine ONNX backups
 

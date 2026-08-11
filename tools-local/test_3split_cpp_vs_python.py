@@ -157,6 +157,15 @@ def run_python_runner(meta, frames):
       "off_policy": off_policy_out.copy(),
     })
   elapsed = time.monotonic() - t0
+  # Release NPU contexts BEFORE the C++ runner loads, so we don't run 6 contexts at once
+  # (contention on core 0 caused intermittent inf that is NOT present in production,
+  # where only the C++ runner exists). See opm10v3-cpp-3split-core-mask.
+  for ctx in [runner._vision_rknn, runner._on_policy_rknn, runner._off_policy_rknn]:
+    try:
+      ctx.release()
+    except Exception:
+      pass
+  del runner
   return results, elapsed
 
 

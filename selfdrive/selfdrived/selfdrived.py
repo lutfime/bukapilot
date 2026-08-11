@@ -541,8 +541,10 @@ class SelfdriveD:
     #    (the mismatch_counter increment is skipped when lat_only). Safety-model
     #    mismatches and rxCheck failures still fire controlsMismatch normally.
     # MADS DEBUG LOGGING (temporary)
+    # NOTE: do NOT re-import cloudlog here — a local `from ... import cloudlog` shadows the
+    # module-level import for the whole data_sample() scope and makes the cloudlog.event() call
+    # above (line ~501, runs at init) raise UnboundLocalError -> selfdrived crash -> no engage (yellow).
     if self.mads_enabled and self.sm.frame % 50 == 0:
-      from openpilot.common.swaglog import cloudlog
       cloudlog.warning(f"MADS_DEBUG frame={self.sm.frame}: mads={self.mads_enabled} lat_only={self.lat_only} enabled={self.enabled} cruise_avail={CS.cruiseState.available} cruise_enabled={CS.cruiseState.enabled} gear={CS.gearShifter} events_count={len(self.events.events)}")
     if self.lat_only:
       if not self.enabled:

@@ -864,6 +864,8 @@ def main(demo=False):
     set_external_cl_context(cl_context.context_ptr, cl_context.device_id_ptr, cl_context.queue_ptr)
   cloudlog.warning("CL context ready; loading model")
   selected = _get_selected_driving_model()
+  cloudlog.warning("modeld selection: SelectedDrivingModel=%r 3split=%s wmi=%s default_rknn=%s",
+                   selected, _use_rknn_3split(), _use_wmi_v12(), _use_rknn_driving())
   if _use_rknn_3split():
     cloudlog.warning("using RKNN 3-split runner (OPM10V3: vision=%s on_policy=%s off_policy=%s)",
                      VISION_3SPLIT_RKNN_PATH.name, ON_POLICY_RKNN_PATH.name, OFF_POLICY_RKNN_PATH.name)
@@ -886,9 +888,16 @@ def main(demo=False):
     cloudlog.warning("using RKNN driving runner (vision=%s policy=%s); inputs cast to float16", VISION_RKNN_PATH.name, POLICY_RKNN_PATH.name)
     model = ModelStateRKNN(cl_context)
   else:
-    override = " (USE_RKNN=0)" if (VISION_RKNN_PATH.exists() and POLICY_RKNN_PATH.exists()) else ""
-    cloudlog.warning(f"using tinygrad driving runner{override}")
-    model = ModelState(cl_context)
+    # SAFE FALLBACK: tinygrad doesn't work on KA2 (no model output -> yellow/no-engage).
+    # If the RKNN split files exist, always fall back to the proven default RKNN model rather
+    # than bricking modeld. This handles: unrecognized SelectedDrivingModel values, a community
+    # model selected but its files missing/garbage, or USE_RKNN=0 misuse.
+    if VISION_RKNN_PATH.exists() and POLICY_RKNN_PATH.exists():
+      cloudlog.warning("modeld: selection %r did not match a usable path -> falling back to default RKNN split (NOT tinygrad)", selected)
+      model = ModelStateRKNN(cl_context)
+    else:
+      cloudlog.warning("using tinygrad driving runner (no RKNN files present)")
+      model = ModelState(cl_context)
   cloudlog.warning(f"models loaded in {time.monotonic() - st:.1f}s, modeld starting")
 
   # visionipc clients

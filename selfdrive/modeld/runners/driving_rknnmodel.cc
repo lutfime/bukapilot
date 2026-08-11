@@ -47,6 +47,20 @@ rknn_core_mask parse_driving_core_mask() {
   return RKNN_NPU_CORE_0_1_2;
 }
 
+rknn_core_mask parse_core_mask_env(const char* env_name, rknn_core_mask default_mask) {
+  // Parse a core mask from an env var: "0", "1", "2", "0_1", "0_1_2".
+  // Returns default_mask if unset or unrecognized.
+  const char* v = std::getenv(env_name);
+  if (!v) return default_mask;
+  std::string s = v;
+  if (s == "0") return RKNN_NPU_CORE_0;
+  if (s == "1") return RKNN_NPU_CORE_1;
+  if (s == "2") return RKNN_NPU_CORE_2;
+  if (s == "0_1") return RKNN_NPU_CORE_0_1;
+  if (s == "0_1_2") return RKNN_NPU_CORE_0_1_2;
+  return default_mask;
+}
+
 std::string lower_copy(const char *s) {
   std::string out = s ? s : "";
   std::transform(out.begin(), out.end(), out.begin(), [](unsigned char c) { return std::tolower(c); });
@@ -292,6 +306,18 @@ DrivingRKNNModel::DrivingRKNNModel(const std::string& vision_path,
   load_model(vision_path, vision_ctx_);
   load_model(on_policy_path, policy_ctx_);         // on_policy stored in policy_ctx_
   load_model(off_policy_path, off_policy_ctx_);
+
+  // --- Per-context NPU core isolation ---
+  // The RK3588 has 3 NPU cores (0, 1, 2). load_model() pins all contexts to core 2 by default.
+  // Running 3 contexts on 1 core causes NPU state corruption (vision pollutes policy contexts → inf).
+  // Fix: distribute each context onto its own physical core so the NPU driver isolates them.
+  // Defaults: vision=2, on_policy=0, off_policy=1.
+  // Env overrides: RKNN_3SPLIT_VISION_CORE, RKNN_3SPLIT_ON_POLICY_CORE, RKNN_3SPLIT_OFF_POLICY_CORE
+  // Note: dmonitoring uses cores 0+1, but runs at ~5Hz so there's ample time-sharing room.
+  rknn_set_core_mask(vision_ctx_->ctx, parse_core_mask_env("RKNN_3SPLIT_VISION_CORE", RKNN_NPU_CORE_2));
+  rknn_set_core_mask(policy_ctx_->ctx, parse_core_mask_env("RKNN_3SPLIT_ON_POLICY_CORE", RKNN_NPU_CORE_0));
+  rknn_set_core_mask(off_policy_ctx_->ctx, parse_core_mask_env("RKNN_3SPLIT_OFF_POLICY_CORE", RKNN_NPU_CORE_1));
+
   vision_ctx_->idx_img = std::max(0, find_input_index(vision_ctx_->input_attrs, vision_ctx_->io_num.n_input, {"img"}));
   vision_ctx_->idx_big = find_input_index(vision_ctx_->input_attrs, vision_ctx_->io_num.n_input, {"big_img", "big"});
   if (vision_ctx_->idx_big < 0 || vision_ctx_->idx_big == vision_ctx_->idx_img) vision_ctx_->idx_big = (vision_ctx_->idx_img == 0) ? 1 : 0;
@@ -302,10 +328,13 @@ DrivingRKNNModel::DrivingRKNNModel(const std::string& vision_path,
   prealloc_output(vision_ctx_, vision_output_);
   prealloc_output(policy_ctx_, policy_output_);       // policy_output_ == on_policy buffer (see constructor init list)
   prealloc_output(off_policy_ctx_, off_policy_output_);
-  LOGD("DrivingRKNNModel (3-file): vision %u in / %u out, on_policy %u in / %u out, off_policy %u in / %u out\n",
+  LOGD("DrivingRKNNModel (3-file): vision %u in / %u out (core %d), on_policy %u in / %u out (core %d), off_policy %u in / %u out (core %d)\n",
        vision_ctx_->io_num.n_input, vision_ctx_->io_num.n_output,
+       (int)parse_core_mask_env("RKNN_3SPLIT_VISION_CORE", RKNN_NPU_CORE_2),
        policy_ctx_->io_num.n_input, policy_ctx_->io_num.n_output,
-       off_policy_ctx_->io_num.n_input, off_policy_ctx_->io_num.n_output);
+       (int)parse_core_mask_env("RKNN_3SPLIT_ON_POLICY_CORE", RKNN_NPU_CORE_0),
+       off_policy_ctx_->io_num.n_input, off_policy_ctx_->io_num.n_output,
+       (int)parse_core_mask_env("RKNN_3SPLIT_OFF_POLICY_CORE", RKNN_NPU_CORE_1));
 }
 
 DrivingRKNNModel::~DrivingRKNNModel() {

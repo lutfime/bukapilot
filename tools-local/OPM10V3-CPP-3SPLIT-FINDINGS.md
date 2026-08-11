@@ -19,6 +19,18 @@
   diag still shows vision-pollutes-policy (A=finite, B=inf+fb-ignored). So the corruption is via
   **shared NPU memory/state that `rknn_set_core_mask` does NOT isolate** — not a per-core
   collision. Strongly suggests the 3 rknn contexts share an NPU memory pool regardless of core.
+- **UPDATE — hybrid C++/Python does NOT fix it either (commit 97d57e7, tested 2026-08-12).**
+  The hybrid uses the proven **2-file C++ path** for vision+on_policy + Python rknnlite for
+  off_policy. Result: `on_policy` **still goes inf** via C++ — 46/200 frames in the 1:1 test
+  (max_abs=inf, or 125–818). And critically: **on_policy alone (NO vision first) is inf 2/5 runs.**
+  This OVERTURNS the "vision pollutes policy / multi-context" theory — the inf is **non-deterministic
+  in the opm10v3 on_policy model + the C librknnrt API itself**, independent of vision, context count,
+  or core. Python rknnlite computes the same model correctly every time.
+- **CONCLUSION: no C++ rknn API variant works for opm10v3 on_policy on this NPU** (3-file, 2-file
+  hybrid, per-core, all intermittent inf). The opm10v3 on_policy `.rknn` is effectively incompatible
+  with the C API here. Viable paths: (a) re-quantize/re-export on_policy so the C API handles it,
+  (b) run opm10v3 fully on Python rknnlite (correct but ~17 Hz → blue/no-engage on KA2), or
+  (c) abandon opm10v3 on KA2 and use default/WMI (which work via the 2-file C path).
 - **Device-only bug.** It cannot be reproduced on Mac (see below).
 
 ---
@@ -91,6 +103,9 @@ It prints, for identical inputs:
   (standard RKNN pattern). No effect on the inf.
 - Python runner context contention in the test: the test now `release()`s the 3 Python RKNNLite
   contexts before loading the C++ runner. Bug persists with only 3 C++ contexts.
+- **Hybrid C++/Python (commit 97d57e7, tested 2026-08-12):** 2-file C++ for vision+on_policy,
+  Python for off_policy. `on_policy` still inf 46/200 frames. And `on_policy` alone (no vision) is
+  inf 2/5 → **not** multi-context/vision-pollution; the inf is in on_policy+C API itself.
 
 ## Next angles for whoever picks this up
 Core isolation is EXHAUSTED. The remaining plausible causes are shared NPU **memory** (not cores):

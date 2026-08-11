@@ -745,7 +745,11 @@ class ModelState3SplitRKNN:
   features_buffer for BOTH policy heads. on_policy provides plan + desire_state (driving control);
   off_policy provides lane_lines + lead + road_edges (perception). Following sunnypilot's
   merge rule: off_policy's plan is dropped when on_policy has one (on_policy plan wins).
-  Python rknnlite only (no C++ fast path yet).
+
+  Hybrid mode (default): C++ 2-file runner for vision + on_policy (fast, proven 2-context path),
+  Python rknnlite for off_policy only (perception head, small model). This avoids the NPU
+  multi-context corruption bug that occurs when 3 C API contexts run simultaneously.
+  Falls back to all-Python if C++ unavailable or RKNN_USE_PYTHON=1.
   """
 
   def __init__(self, context: CLContext):
@@ -760,31 +764,47 @@ class ModelState3SplitRKNN:
     self._on_policy_output_size = meta['on_policy_output_size']
     self._off_policy_output_size = meta['off_policy_output_size']
 
-    # Prefer C++ RKNN runner when available (no lite path).
-    # The 3-file C++ runner loads all 3 models and exposes run_off_policy().
-    self._rknn_cpp = None
+    # --- Hybrid mode: C++ for vision+on_policy, Python for off_policy ---
+    # The C++ 2-file runner is proven to work (same path as default 0.10.3 / WMI v12).
+    # Running 3 C API contexts simultaneously causes NPU state corruption (inf bug).
+    # By keeping C++ at 2 contexts and running off_policy via Python rknnlite, we get
+    # C++ speed for the heavy vision + driving-control head, while the small perception
+    # head runs through the Python path that handles multi-model correctly.
+    self._rknn_cpp = None      # C++ runner: vision + on_policy (2-file mode)
+    self._off_policy_py = None # Python rknnlite: off_policy only
+    self._rknn = None          # All-Python fallback (all 3 models)
     force_rknn_python = os.getenv("RKNN_USE_PYTHON", "0") == "1"
     if not force_rknn_python:
       try:
         from openpilot.selfdrive.modeld.runners.driving_rknnmodel_pyx import DrivingRKNNRunnerCpp
+        # 2-file C++ call: vision + on_policy (the "policy" in 2-file terms)
         self._rknn_cpp = DrivingRKNNRunnerCpp(
           str(VISION_3SPLIT_RKNN_PATH),
           str(ON_POLICY_RKNN_PATH),
-          str(OFF_POLICY_RKNN_PATH),
           vision_out_size=self._vision_output_size,
           policy_out_size=self._on_policy_output_size,
-          off_policy_out_size=self._off_policy_output_size,
         )
-        cloudlog.warning("modeld 3-split: using C++ runner (driving_rknnmodel_pyx) vision=%s on_policy=%s off_policy=%s",
-                         VISION_3SPLIT_RKNN_PATH.name, ON_POLICY_RKNN_PATH.name, OFF_POLICY_RKNN_PATH.name)
+        cloudlog.warning("modeld 3-split hybrid: C++ for vision+on_policy (vision=%s on_policy=%s)",
+                         VISION_3SPLIT_RKNN_PATH.name, ON_POLICY_RKNN_PATH.name)
+
+        # Load off_policy via Python rknnlite (single model, no multi-context issue)
+        from rknnlite.api import RKNNLite
+        self._off_policy_py = RKNNLite(verbose=False)
+        self._off_policy_py.load_rknn(str(OFF_POLICY_RKNN_PATH))
+        self._off_policy_py.init_runtime()
+        cloudlog.warning("modeld 3-split hybrid: Python rknnlite for off_policy (%s)",
+                         OFF_POLICY_RKNN_PATH.name)
       except Exception as e:
-        cloudlog.warning("modeld 3-split: C++ runner unavailable (%s), using Python rknnlite", e)
+        cloudlog.warning("modeld 3-split: C++ hybrid unavailable (%s), falling back to all-Python", e)
+        self._rknn_cpp = None
+        self._off_policy_py = None
     else:
-      cloudlog.warning("modeld 3-split: RKNN_USE_PYTHON=1, forcing Python rknnlite runner")
+      cloudlog.warning("modeld 3-split: RKNN_USE_PYTHON=1, forcing all-Python rknnlite runner")
+
     if self._rknn_cpp is None:
       from openpilot.selfdrive.modeld.runners.driving_3split_rknn import Driving3SplitRKNNRunner
       self._rknn = Driving3SplitRKNNRunner(MODEL_DIR)
-      cloudlog.warning("modeld 3-split: using Python rknnlite runner (OPM10V3: vision=%s on_policy=%s off_policy=%s)",
+      cloudlog.warning("modeld 3-split: using all-Python rknnlite runner (vision=%s on_policy=%s off_policy=%s)",
                        VISION_3SPLIT_RKNN_PATH.name, ON_POLICY_RKNN_PATH.name, OFF_POLICY_RKNN_PATH.name)
 
     self.frames = {
@@ -822,7 +842,7 @@ class ModelState3SplitRKNN:
     if prepare_only:
       return None
 
-    # 1. Vision inference + 2. Policy inference (C++ or Python path)
+    # --- Hybrid: C++ vision+on_policy, Python off_policy ---
     if self._rknn_cpp is not None:
       self.vision_output = self._rknn_cpp.run_vision(img_np, big_img_np).reshape(-1)
       vision_outputs_dict = self.parser.parse_vision_outputs(
@@ -832,16 +852,20 @@ class ModelState3SplitRKNN:
       for k in ['desire_pulse', 'features_buffer']:
         self.numpy_inputs[k][:] = self.full_input_queues.get(k)[k]
       self.numpy_inputs['traffic_convention'][:] = inputs['traffic_convention']
+      # on_policy via C++ (driving control — plan, steering)
       self.on_policy_output = self._rknn_cpp.run_policy(
         self.numpy_inputs['desire_pulse'],
         self.numpy_inputs['traffic_convention'],
         self.numpy_inputs['features_buffer'],
       ).reshape(-1)
-      self.off_policy_output = self._rknn_cpp.run_off_policy(
-        self.numpy_inputs['desire_pulse'],
-        self.numpy_inputs['traffic_convention'],
-        self.numpy_inputs['features_buffer'],
-      ).reshape(-1)
+      # off_policy via Python rknnlite (perception — lane lines, lead, road edges)
+      off_inputs = [
+        np.ascontiguousarray(self.numpy_inputs['desire_pulse'].astype(np.float16).reshape(self.policy_input_shapes['desire_pulse'])),
+        np.ascontiguousarray(self.numpy_inputs['traffic_convention'].astype(np.float16).reshape(self.policy_input_shapes['traffic_convention'])),
+        np.ascontiguousarray(self.numpy_inputs['features_buffer'].astype(np.float16).reshape(self.policy_input_shapes['features_buffer'])),
+      ]
+      off_out = self._off_policy_py.inference(inputs=off_inputs, data_type="float16")
+      self.off_policy_output = off_out[0].astype(np.float32).reshape(-1)
     else:
       self.vision_output = self._rknn.run_vision(img_np, big_img_np).reshape(-1)
       vision_outputs_dict = self.parser.parse_vision_outputs(

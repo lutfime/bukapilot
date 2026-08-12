@@ -182,18 +182,49 @@ dangerous steering is impossible. Worst case ~6% of frames: a momentary rate-lim
 one frame of straight (nan). Safe, slightly jerky.
 
 (`selfdrive/controls/lib/` has no other isfinite/isnan — these two guards are the ones that matter.
-`modelV2.valid` is set from calibration/frame-drop in `fill_model_msg`, NOT output finiteness, so it
-does not gate this — the actuator guard is what actually protects.)
+`modelV2.valid` is set from calibration/frame-drop in `fill_model_msg`, NOT output finiteness. **Note:
+these guards protect STEERING only.** The off_policy LEAD overflow is NOT guarded → it causes the
+constant-brake (see CURRENT BLOCKER). So "safe" = steering only, not lead/longitudinal.)
 
 ### Overflow-reduction attempts (model-level, by the reconversion agent)
 
-1. **erf Gelu** — on_policy 14%→6% (helps: its overflow WAS the Gelu). off_policy erf ≈ sigmoid (~5-6%;
-   no help: off_policy overflow is NOT Gelu-driven). on_policy erf is the live default.
-2. **optimization_level=0** (commit 9357c64, `*_erf_opt0.rknn`) — erf + NO op fusion. **TESTED
-   2026-08-12: NO improvement** (on_policy erf+opt0 = 13% vs erf = 13%, identical; off_policy 19% vs
-   22%, within noise). The hypothesis (level-3 fusion causes overflow) is WRONG — level 0 overflows
-   the same. The overflow is inherent to the model's fp16 activations, not fusion/Gelu. **Not used.**
-3. (not tried — the proper fix path, see "HOW TO PROPERLY FIX THE MODEL" below)
+1. **erf Gelu (DONE both heads)** — on_policy 14%→~6-9% (its overflow was partly Gelu); off_policy erf
+   ≈ sigmoid (no help — off_policy overflow is NOT Gelu-driven). on_policy erf is the live default.
+2. **optimization_level=0** (erf + no fusion, TESTED 2026-08-12) — **no improvement**; overflow is in
+   fp16 MatMul accumulation, not op fusion. Ruled out (`*_erf_opt0.rknn`, not used).
+3. **INT8 quantization (DONE by agent, NEEDS ONROAD TEST) — the definitive fp16-overflow fix.** Both
+   heads converted to INT8 (w8a8) with int32 accumulators. **Int32 can never overflow** (max ~2.1e9 vs
+   fp16 65,504). Tradeoff: ~2-5% accuracy loss every frame. Files: `driving_on_policy_opm10v3_int8.rknn`
+   (8.1 MB), `driving_off_policy_opm10v3_int8.rknn` (11.7 MB). RKNN I/O is now int8; Fix E's
+   pass_through=0 auto-converts fp16 input→int8 native, want_float=1 converts output back. **This kills
+   the phantom-brake** (no lead overflow). Test 1:1 before driving. **This is the current lead fix.**
+4. (alternatives if INT8 accuracy is unacceptable) SHARD activation rescaling; mixed precision (fp32 on
+   overflow layers) — see "HOW TO PROPERLY FIX THE MODEL".
+
+### Full model variant lineup (all in selfdrive/modeld/models/)
+
+**on_policy variants:**
+| File | Gelu | Precision | Opt | Size | Overflow |
+|------|------|-----------|-----|------|----------|
+| `driving_on_policy_opm10v3.rknn` | sigmoid+Clip | fp16 | 3 | 15.9 MB | ~20% |
+| `driving_on_policy_opm10v3_erf.rknn` | erf | fp16 | 3 | 15.8 MB | ~9% |
+| `driving_on_policy_opm10v3_erf_opt0.rknn` | erf | fp16 | 0 | 15.8 MB | ~9% (no improvement) |
+| **`driving_on_policy_opm10v3_int8.rknn`** | **erf** | **int8** | **3** | **8.1 MB** | **0% (impossible)** |
+
+**off_policy variants:**
+| File | Gelu | Precision | Opt | Size | Overflow |
+|------|------|-----------|-----|------|----------|
+| `driving_off_policy_opm10v3.rknn` | sigmoid+Clip | fp16 | 3 | 22.1 MB | ~18% |
+| `driving_off_policy_opm10v3_erf.rknn` | erf | fp16 | 3 | 21.9 MB | ~9% |
+| `driving_off_policy_opm10v3_erf_opt0.rknn` | erf | fp16 | 0 | 21.9 MB | ~9% (no improvement) |
+| **`driving_off_policy_opm10v3_int8.rknn`** | **erf** | **int8** | **3** | **11.7 MB** | **0% (impossible)** |
+
+**To swap models on device:**
+```bash
+# INT8 (zero overflow, ~2-5% accuracy loss) — kills the phantom-brake:
+cp driving_on_policy_opm10v3_int8.rknn driving_on_policy_opm10v3.rknn
+cp driving_off_policy_opm10v3_int8.rknn driving_off_policy_opm10v3.rknn
+```
 
 ### How real driving triggers overflow — CONFIRMED (2026-08-12 drive)
 The overflow is NOT just a bench artifact — it causes the **constant-brake** drive symptom. off_policy

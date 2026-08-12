@@ -79,9 +79,16 @@ class CarInterface(CarInterfaceBase):
         # Low kpV[0]=0.0005 = the smooth, no-wobble/no-reengage-slam feel KA1 had (vs torque's huge low-speed kp).
         ret.lateralTuning.init("pid")
         ret.lateralTuning.pid.kpBP = [0.0, 5.0, 15.0, 25.0, 35.0]
-        ret.lateralTuning.pid.kpV  = [0.0005, 0.02, 0.05, 0.10, 0.17]  # 54km/h: cut was 0.06->0.045 (a11fb76) to damp overshoot; partial restore to 0.05 (2026-08-09). City drive: no regression (step p95 0.026≈baseline). i/OUT still ~70% so don't fully restore to 0.06. 90/126 km/h unchanged.
+        # 2026-08-12: cut low-speed kp ~25-30% (0.02->0.015 @18kmh, 0.05->0.035 @54kmh). WMI v12 oversteer+oscillation
+        #   at corners (170deg corner @29kmh: +/-28deg wobble @1.3Hz; desired path smooth -> PID hunt, not model noise).
+        #   Lower kp -> less saturated output (was 0.86) -> less overshoot. Shared by ALL models (default+WMI+opm10v3).
+        # >>> REVERT TO: kpV = [0.0005, 0.02, 0.05, 0.10, 0.17]  if default model feels sluggish / understeers. <<<
+        # History: 54km/h was 0.06->0.045 (a11fb76) to damp overshoot; partial restore to 0.05 (2026-08-09). i/OUT ~70%. 90/126 km/h unchanged.
+        ret.lateralTuning.pid.kpV  = [0.0005, 0.015, 0.035, 0.10, 0.17]
         ret.lateralTuning.pid.kiBP = [0.0, 5.0, 15.0, 25.0, 35.0]
-        ret.lateralTuning.pid.kiV  = [0.001, 0.005, 0.05, 0.4, 0.5]  # decreased 0.01->0.005 @18kmh, 0.09->0.05 @54kmh (experiment, anti-low-speed-oscillation); ends unchanged. NOTE: only active after openpilot restart (CarParams re-read).
+        # 2026-08-12: small low-speed ki trim (0.005->0.004 @18kmh, 0.05->0.04 @54kmh) — integrator wound to 0.34 at the WMI corner; less ki = less sustained overshoot after the corner.
+        # >>> REVERT TO: kiV = [0.001, 0.005, 0.05, 0.4, 0.5]  if low-speed steady-state offset grows. <<<
+        ret.lateralTuning.pid.kiV  = [0.001, 0.004, 0.04, 0.4, 0.5]  # earlier: 0.01->0.005 @18kmh, 0.09->0.05 @54kmh. Ends unchanged. Active after openpilot restart (CarParams re-read).
         ret.lateralTuning.pid.kf = 0.0000250
       else:
         # Torque (self-tuning via locationd/torqued) — OPT-IN (toggle off). Seed = torqued-converged; torqued refines online. Stock KP_INTERP rails at low speed on this car -> wobble (see result/lateral_analysis.py).

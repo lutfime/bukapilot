@@ -82,11 +82,41 @@ to WMI v12** (no overflow, proven safe). OPM10V3 is experimental — driving saf
 ### Other ways to reduce overflow (no model surgery, in order of effort)
 
 1. **erf Gelu (DONE for both heads)** — halves overflow. on_policy erf committed, off_policy erf committed.
-2. **optimization_level=2** (instead of 3) in RKNN conversion — level 3 aggressively fuses ops,
-   some fusions may create overflow-prone intermediates. One-number change. Untested.
-3. **Clip on ALL MatMul outputs** — not just Gelu. Heavy (~100+ extra nodes) but catches everything.
-4. **SHARD paper approach** — static activation rescaling. Smarter than blind clipping but complex.
+2. **optimization_level=0** (no fusion, TESTED 2026-08-12) — converted both heads with erf + opt_level=0.
+   **RESULT: no improvement.** Overflow is in fp16 MatMul accumulation itself, not op fusion. Ruled out.
+3. **INT8 quantization (DONE, NEEDS TESTING)** — both heads converted to INT8 (w8a8) with int32
+   accumulators. **Int32 can never overflow** (max 2.1 billion vs fp16 65,504). This is the
+   definitive fix for fp16 overflow. Tradeoff: ~2-5% accuracy loss on every frame.
+   Files: `driving_on_policy_opm10v3_int8.rknn` (8.1 MB), `driving_off_policy_opm10v3_int8.rknn` (11.7 MB).
+   **RKNN WARNING**: input/output dtype changed to int8. Fix E's pass_through=0 should auto-convert
+   (fp16 input → int8 native), and want_float=1 converts output back. Test 1:1 before driving.
+4. **SHARD paper approach** — static activation rescaling. Complex, uncertain payoff.
 5. **Mixed precision** — keep overflow-prone layers in fp32. Major RKNN config change.
+
+### Full model variant lineup (all in selfdrive/modeld/models/)
+
+**on_policy variants:**
+| File | Gelu | Precision | Opt | Size | Overflow |
+|------|------|-----------|-----|------|----------|
+| `driving_on_policy_opm10v3.rknn` | sigmoid+Clip | fp16 | 3 | 15.9 MB | ~20% |
+| `driving_on_policy_opm10v3_erf.rknn` | erf | fp16 | 3 | 15.8 MB | ~9% |
+| `driving_on_policy_opm10v3_erf_opt0.rknn` | erf | fp16 | 0 | 15.8 MB | ~9% (no improvement) |
+| **`driving_on_policy_opm10v3_int8.rknn`** | **erf** | **int8** | **3** | **8.1 MB** | **0% (impossible)** |
+
+**off_policy variants:**
+| File | Gelu | Precision | Opt | Size | Overflow |
+|------|------|-----------|-----|------|----------|
+| `driving_off_policy_opm10v3.rknn` | sigmoid+Clip | fp16 | 3 | 22.1 MB | ~18% |
+| `driving_off_policy_opm10v3_erf.rknn` | erf | fp16 | 3 | 21.9 MB | ~9% |
+| `driving_off_policy_opm10v3_erf_opt0.rknn` | erf | fp16 | 0 | 21.9 MB | ~9% (no improvement) |
+| **`driving_off_policy_opm10v3_int8.rknn`** | **erf** | **int8** | **3** | **11.7 MB** | **0% (impossible)** |
+
+**To swap models on device:**
+```bash
+# INT8 (zero overflow, ~2-5% accuracy loss):
+cp driving_on_policy_opm10v3_int8.rknn driving_on_policy_opm10v3.rknn
+cp driving_off_policy_opm10v3_int8.rknn driving_off_policy_opm10v3.rknn
+```
 
 ### Whether real driving triggers overflow — UNCONFIRMED
 

@@ -1,10 +1,57 @@
 # OPM10V3 C++ 3-Split Runner — Bug Findings & Reproduction (HANDOFF)
 
-> 🔴 **WHY OPM10V3 WAS BLUE ON THE DRIVE (root cause, 2026-08-12, commit 4f4d211):** a structural
-> crash in `ModelState3SplitRKNN.run()` — NOT the C++ inf or fp16 overflow. See the next section.
-> ✅ Fix E (per-input `pass_through`) resolved the C++ on_policy inf separately — see RESOLVED below.
+> **CURRENT STATE (2026-08-12):** opm10v3 now ENGAGES (green) after the parse-crash fix (commit
+> 4f4d211), but **drives badly — constant braking + lateral starved of speed.** Root cause found and
+> is the **off_policy fp16 overflow in the LEAD output** (phantom closing lead → collision-avoidance
+> brake). See the top section. **Fix must be in the MODEL (fp16-safe conversion), NOT a controls-code
+> guard** (user decision: keep openpilot code upstream). Fix path below.
+> ✅ Earlier blockers fixed: parse crash (4f4d211), C++ on_policy inf via Fix E (per-input pass_through).
 
-## 🔴 DRIVE-BLOCKER (root cause of blue/no-engage) — 3-split output-parse crash
+## 🔴 CURRENT BLOCKER — constant brake after engage = off_policy lead overflow (2026-08-12 drive)
+
+**Drive `2026-08-12--04-48-19` (after parse fix):** engages (green), modelV2 published at 20 Hz, no
+crash. BUT constant braking + lateral "not working." Driver overrode constantly (steerOverride 330,
+gasPressedOverride 184). vEgo median only 3.2 m/s (11 km/h) — the braking kept the car at a crawl.
+
+**EXACT root cause of the brake (found in rlog):** the lead car's relative velocity is computed from
+the **MODEL lead**, not the radar — `selfdrive/controls/radard.py:141` `get_RadarState_from_vision`:
+```python
+lead_v_rel_pred = lead_msg.v[0] - model_v_ego    # vRel comes from the MODEL lead (off_policy)
+return {"dRel": lead_msg.x[0] - RADAR_TO_CAMERA, "vRel": lead_v_rel_pred, ...}
+```
+When **off_policy overflows in fp16 (~20% of frames)**, `lead_msg.v[0]` is garbage → vRel goes hugely
+negative (median **-3.38 m/s**, extremes **-16 m/s**) → the longitudinal planner sees a "lead closing
+at up to 57 km/h" → **slams the brakes for collision avoidance.**
+
+**Evidence (rlog, 21823 carControl frames):**
+- Brake frames: **914 have lead status=True + vRel<-1 (phantom approaching)**; 395 no-lead; only 9
+  with a sane lead. → ~70% of braking is phantom-lead collision-avoidance.
+- vRel when braking: median -3.38, range [-16.05, 6.26]; 394 frames vRel<-5.
+- The ~20% phantom-brake rate **matches the ~20% off_policy fp16 overflow rate** measured offroad.
+- Model's own `desiredAcceleration` median **+0.12** (it wants to *accelerate*) and `shouldStop` 0% —
+  so the brake is forced by the planner's phantom lead, NOT the model commanding stop.
+
+**Why lateral "doesn't work" = secondary.** The constant brake keeps the car at crawl/standstill →
+lateral never reaches a meaningful speed. on_policy's curvature itself is **finite and sane**
+(desiredCurvature ~-0.001, orientationRate ~0.002; plan structure is correct: position.x monotonic
+from 0, position.y from 0). This fork steers off `desiredCurvature` (from the on_policy plan), NOT
+lane lines — so off_policy lane_lines overflow is a UI glitch, not a lateral problem. **Fix the brake
+(off_policy lead overflow) and the car will reach speed; then re-evaluate lateral.**
+
+### Ruled out (investigated, NOT the cause)
+- Close phantom lead: 0 close-lead (<8 m) frames; X70 has a radar (`proton_radar` DBC).
+- `shouldStop`: 0%.
+- Model desiredAccel: median +0.12 (accelerate, not brake).
+- on_policy plan layout mismatch: plan structure is sane (position.x monotonic 0→~190 m, position.y
+  starts at 0). NOT a Plan-enum misalignment.
+- lane_lines overflow: doesn't affect lateral (lateral uses on_policy desiredCurvature).
+
+### NO controls-code guard (user decision)
+Do NOT add a lead-plausibility guard in radard / do NOT fork the controls code. **The fix must be in
+the model** so off_policy stops overflowing. (openpilot's existing `vel_sane` check only covers
+radar-fused tracks, not model-only leads — but we are not patching that; we fix the model.)
+
+## 🔴 EARLIER DRIVE-BLOCKER (fixed) — 3-split output-parse crash (commit 4f4d211)
 
 **Symptom (drive 2026-08-12--04-33-04):** blue LED when trying to engage; **zero `modelV2` in the
 entire rlog**; modeld "RUNNING" but crash-looping. Camera frames arrived fine ("frames out of sync").
@@ -146,15 +193,56 @@ does not gate this — the actuator guard is what actually protects.)
    2026-08-12: NO improvement** (on_policy erf+opt0 = 13% vs erf = 13%, identical; off_policy 19% vs
    22%, within noise). The hypothesis (level-3 fusion causes overflow) is WRONG — level 0 overflows
    the same. The overflow is inherent to the model's fp16 activations, not fusion/Gelu. **Not used.**
-3. (not tried) Clip on ALL MatMul outputs; SHARD activation rescaling; mixed precision.
+3. (not tried — the proper fix path, see "HOW TO PROPERLY FIX THE MODEL" below)
 
-### Whether real driving triggers overflow — UNCONFIRMED
-
-The 5-18% rates were measured with synthetic features (random images = worst case ~18%; smooth-
-temporal = ~5-6%, more realistic). Real camera data may be lower still. **Only a real test drive
-answers this.** Start in a safe area; watch for jerkiness. If bad, revert to WMI v12 (fp16-safe).
+### How real driving triggers overflow — CONFIRMED (2026-08-12 drive)
+The overflow is NOT just a bench artifact — it causes the **constant-brake** drive symptom. off_policy
+lead overflow → phantom closing lead → collision-avoidance brake (see CURRENT BLOCKER section). So the
+overflow MUST be fixed at the model level for opm10v3 to be drivable. on_policy plan output is finite
+on real data (the plan/curvature looked sane on the drive); the brake is specifically off_policy lead.
 
 default + WMI do NOT have this issue (different, fp16-safe models).
+
+## HOW TO PROPERLY FIX THE MODEL (fp16-safe conversion) — the only correct path
+
+**Constraint:** the RK3588 NPU runs **fp16** natively (`quantized_dtype='w16a16i'`, opt_level=3,
+`do_quantization=False` in `tools-local/convert_opm10v3_to_rknn.py`). fp32 ops fall back to **CPU** →
+far too slow. So the model MUST stay fp16; the fix must stop the overflow *within* fp16. The erf and
+opt0 attempts were **guesses** — that's why they failed. The proper fix needs the actual data first.
+
+### Step 1 — STOP GUESSING: find the exact layers that overflow (essential, do this first)
+rknn-toolkit2 has a **simulator** (runs the model on CPU, reports per-layer/per-tensor activation
+magnitudes). Run off_policy (+ on_policy) through the simulator with a few real inputs (e.g. the
+in-distribution features from `validate_opm10v3_1to1.py`) and it prints **exactly which layers'
+outputs approach or exceed 65504**. This is the diagnostic every prior attempt skipped. Needs the
+x86 Docker + rknn-toolkit2 (Mac can't run it; device only has rknnlite, not the simulator) → the
+reconversion agent's task. **Also run comma's OFFICIAL 0.11 model through the same simulator** — if it
+doesn't overflow, the problem is opm10v3's conversion/weights, not fp16 itself.
+
+### Step 2 — then apply one of these (both fp16-compatible, both proper)
+- **(A) Mixed precision — cleanest, no accuracy loss.** rknn-toolkit2 can run **only the overflowing
+  layers** (named in Step 1) in fp32 (CPU) while the rest stay fp16 (NPU). Usually only a handful of
+  layers overflow, so the speed hit is small. Zero accuracy change. Configurable via `rknn.config()`
+  / `build(mixed_dtype_list=...)` (exact API by toolkit version). **Preferred.**
+- **(B) Targeted activation clipping.** Extend `tools-local/rewrite_gelu_sigmoid.py` to also insert
+  ONNX `Clip` nodes after **only the overflowing layers** (MatMul/dense outputs), at a bound just
+  above their normal max (so normal operation is untouched, only the pathological >65504 path is
+  capped). The rewriter already exists and is proven (it does exactly this for Gelu). Caveat: the
+  clip bound must be chosen so downstream ops don't re-overflow — use the simulator magnitudes.
+
+### The deeper question
+Comma's official 0.11 models run fp16 on this NPU class **without overflowing**. So either (a) opm10v3's
+weights are numerically unstable (a community re-train/re-export issue → clipping/mixed-precision is
+the only fp16 fix), or (b) the conversion settings differ from comma's. Step 1's comparison answers
+this. If opm10v3 is just a bad export, obtaining comma's actual 0.11 model (or a cleaner export) is
+cleaner than patching.
+
+**Do NOT add controls-code guards** (lead-plausibility filter in radard, etc.) — user decision: keep
+openpilot code upstream. The fix belongs in the model.
+
+**Fix D (global `pass_through=1`, commit 2224dbd):** the right *idea* (pass_through was the lever)
+but wrong *scope* — global `1` broke vision (which needs the NHWC→NC1HWC2 conversion). Fix E makes
+it per-input. Fix D is subsumed.
 
 **Fix D (global `pass_through=1`, commit 2224dbd):** the right *idea* (pass_through was the lever)
 but wrong *scope* — global `1` broke vision (which needs the NHWC→NC1HWC2 conversion). Fix E makes
@@ -441,9 +529,15 @@ difference (pass_through) that causes the inf. Fix D (pass_through) is the corre
   old global-convert behavior for debugging.
 
 ## Current state (2026-08-12)
-- **Fix E deployed.** Device `.so` rebuilt with per-input pass_through (md5 `26f8cb1c…`),
-  `prebuilt` present, both overlays updated.
-- All three models (default/wmiv12/opm10v3) verified to produce finite policy output offroad.
-- `SelectedDrivingModel` = `opm10v3`. **Pending: a real onroad drive to validate Hz + engage**
-  (modeld is onroad-only; offroad it does not run, so Hz/engage cannot be checked without the car).
-- default + WMI remain safe fallbacks (verified finite with Fix E; easy revert via the param).
+- **Engages now (green)** — parse-crash fix (4f4d211) + Fix E (per-input pass_through, device .so
+  rebuilt) both deployed to both overlays; `prebuilt` present; `SelectedDrivingModel = opm10v3`;
+  on_policy = erf default. modelV2 publishes at 20 Hz, no crash.
+- **BUT undrivable: constant brake** from off_policy lead overflow (phantom closing lead →
+  collision-avoidance brake; ~20% of frames, matches the overflow rate). See CURRENT BLOCKER + HOW
+  TO PROPERLY FIX THE MODEL sections. **Fix must be in the model (fp16-safe conversion), not controls.**
+- **Next action = simulator diagnosis** (Step 1 of the fix path): the reconversion agent runs
+  rknn-toolkit2's simulator to find the exact overflowing layers, then applies mixed-precision (A)
+  or targeted clipping (B). No more conversion guesses.
+- default + WMI remain the safe, fp16-safe driving fallbacks (revert: `echo -n wmiv12 >
+  /data/params/SelectedDrivingModel; sudo systemctl restart kommu.service`).
+- Deploy the parse fix via `bash result/deploy_opm10v3_parse_fix.sh` (already done on this device).

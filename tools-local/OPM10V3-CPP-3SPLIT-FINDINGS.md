@@ -237,41 +237,43 @@ lead overflow → phantom closing lead → collision-avoidance brake (see CURREN
 overflow MUST be fixed at the model level for opm10v3 to be drivable. on_policy plan output is finite
 on real data (the plan/curvature looked sane on the drive); the brake is specifically off_policy lead.
 
-default + WMI do NOT have this issue (different, fp16-safe models).
+default + WMI do NOT have the fp16 overflow issue (different model architecture, opset 17, no
+attention mask). **However, WMI v12 has reported braking issues on the X70 car** — it is NOT a
+confirmed clean fallback. Default 0.10.3 is the only model confirmed working without braking.
 
-## HOW TO PROPERLY FIX THE MODEL (fp16-safe conversion) — the only correct path
+## HOW TO PROPERLY FIX THE MODEL — UPDATED: simulator approach FAILED
 
-**Constraint:** the RK3588 NPU runs **fp16** natively (`quantized_dtype='w16a16i'`, opt_level=3,
-`do_quantization=False` in `tools-local/convert_opm10v3_to_rknn.py`). fp32 ops fall back to **CPU** →
-far too slow. So the model MUST stay fp16; the fix must stop the overflow *within* fp16. The erf and
-opt0 attempts were **guesses** — that's why they failed. The proper fix needs the actual data first.
+**Previous plan (Step 1: simulator diagnosis → Step 2: mixed precision/clipping) DID NOT WORK.**
 
-### Step 1 — STOP GUESSING: find the exact layers that overflow (essential, do this first)
-rknn-toolkit2 has a **simulator** (runs the model on CPU, reports per-layer/per-tensor activation
-magnitudes). Run off_policy (+ on_policy) through the simulator with a few real inputs (e.g. the
-in-distribution features from `validate_opm10v3_1to1.py`) and it prints **exactly which layers'
-outputs approach or exceed 65504**. This is the diagnostic every prior attempt skipped. Needs the
-x86 Docker + rknn-toolkit2 (Mac can't run it; device only has rknnlite, not the simulator) → the
-reconversion agent's task. **Also run comma's OFFICIAL 0.11 model through the same simulator** — if it
-doesn't overflow, the problem is opm10v3's conversion/weights, not fp16 itself.
+The RKNN simulator (`init_runtime(target=None)`) runs the model on CPU. Tested 2026-08-12:
+ALL variants (erf, nomaskinf, etc.) show **0% overflow in the simulator**, but the real NPU shows
+9-26%. The simulator's CPU fp16 implementation handles edge cases differently than the NPU's
+dedicated fp16 hardware. **Off-device tools cannot reproduce or diagnose NPU-specific overflow.**
 
-### Step 2 — then apply one of these (both fp16-compatible, both proper)
-- **(A) Mixed precision — cleanest, no accuracy loss.** rknn-toolkit2 can run **only the overflowing
-  layers** (named in Step 1) in fp32 (CPU) while the rest stay fp16 (NPU). Usually only a handful of
-  layers overflow, so the speed hit is small. Zero accuracy change. Configurable via `rknn.config()`
-  / `build(mixed_dtype_list=...)` (exact API by toolkit version). **Preferred.**
-- **(B) Targeted activation clipping.** Extend `tools-local/rewrite_gelu_sigmoid.py` to also insert
-  ONNX `Clip` nodes after **only the overflowing layers** (MatMul/dense outputs), at a bound just
-  above their normal max (so normal operation is untouched, only the pathological >65504 path is
-  capped). The rewriter already exists and is proven (it does exactly this for Gelu). Caveat: the
-  clip bound must be chosen so downstream ops don't re-overflow — use the simulator magnitudes.
+ONNX Runtime also fails (computes in fp32 internally despite fp16 input types).
 
-### The deeper question
-Comma's official 0.11 models run fp16 on this NPU class **without overflowing**. So either (a) opm10v3's
-weights are numerically unstable (a community re-train/re-export issue → clipping/mixed-precision is
-the only fp16 fix), or (b) the conversion settings differ from comma's. Step 1's comparison answers
-this. If opm10v3 is just a bad export, obtaining comma's actual 0.11 model (or a cleaner export) is
-cleaner than patching.
+### What this means
+
+The "find the exact overflowing layers" approach is **impossible off-device**. We cannot know
+which layers overflow on the NPU without running on the NPU. The per-layer diagnostic tools
+(ONNX Runtime, RKNN simulator) do not match NPU behavior.
+
+### Remaining options (revised)
+
+1. **INT8 quantization (BEST BET)** — int32 accumulators physically cannot overflow, regardless of
+   NPU hardware quirks. Models already converted: `driving_*_opm10v3_int8.rknn`. Need device 1:1
+   validation. Tradeoff: ~2-5% accuracy loss.
+
+2. **Get comma's official 0.11 model** — if it doesn't overflow on this NPU, OPM10V3's community
+   weights are the problem. A clean comma export would solve everything.
+
+3. **Accept default 0.10.3** — the only confirmed-working model on this car.
+
+### The deeper question (STILL UNANSWERED)
+Comma's official 0.11 models may run fp16 on this NPU without overflowing. We haven't been able to
+test this because the simulator doesn't reproduce NPU overflow. If we could get comma's actual 0.11
+policy .rknn files and run them on the device, we'd know if the problem is OPM10V3's weights or
+fp16 itself.
 
 **Do NOT add controls-code guards** (lead-plausibility filter in radard, etc.) — user decision: keep
 openpilot code upstream. The fix belongs in the model.
@@ -564,16 +566,66 @@ difference (pass_through) that causes the inf. Fix D (pass_through) is the corre
   `/data/openpilot` and `/data/safe_staging/merged`). Or set `RKNN_PASS_THROUGH=0` to restore the
   old global-convert behavior for debugging.
 
-## Current state (2026-08-12)
-- **Engages now (green)** — parse-crash fix (4f4d211) + Fix E (per-input pass_through, device .so
-  rebuilt) both deployed to both overlays; `prebuilt` present; `SelectedDrivingModel = opm10v3`;
-  on_policy = erf default. modelV2 publishes at 20 Hz, no crash.
-- **BUT undrivable: constant brake** from off_policy lead overflow (phantom closing lead →
-  collision-avoidance brake; ~20% of frames, matches the overflow rate). See CURRENT BLOCKER + HOW
-  TO PROPERLY FIX THE MODEL sections. **Fix must be in the model (fp16-safe conversion), not controls.**
-- **Next action = simulator diagnosis** (Step 1 of the fix path): the reconversion agent runs
-  rknn-toolkit2's simulator to find the exact overflowing layers, then applies mixed-precision (A)
-  or targeted clipping (B). No more conversion guesses.
-- default + WMI remain the safe, fp16-safe driving fallbacks (revert: `echo -n wmiv12 >
-  /data/params/SelectedDrivingModel; sudo systemctl restart kommu.service`).
-- Deploy the parse fix via `bash result/deploy_opm10v3_parse_fix.sh` (already done on this device).
+## Current state (2026-08-12, UPDATED)
+
+### Bottom line: OPM10V3 is UNDRIVABLE — constant phantom brake. No fp16 fix found.
+
+**What works:**
+- C++ runner (Fix E): ✅ correct, no C API inf, engages green at 20 Hz
+- on_policy plan output: ✅ finite on real driving data (steering/curvature look sane)
+- All Python and C++ runner code: ✅ working correctly
+
+**What's broken:**
+- **off_policy lead overflow → constant phantom brake.** The off_policy head produces inf on
+  ~17% of frames on the NPU. inf lead → collision-avoidance system thinks there's a car right in
+  front → brakes constantly. This makes OPM10V3 undrivable in practice.
+- on_policy has ~9-21% overflow too (varies by Gelu variant), but the plan output looked OK on
+  the test drive — the brake is specifically from off_policy lead.
+
+**WMI v12 is ALSO NOT a clean fallback** — user reports braking issues with WMI too. Do NOT
+assume WMI works perfectly. The "default + WMI are fp16-safe" claim is unverified — they may
+have their own issues on this car/setup. **The only model confirmed working is the default 0.10.3.**
+
+### All fp16 overflow fixes attempted — NONE eliminated overflow
+
+| Fix | on_policy | off_policy | Verdict |
+|-----|-----------|------------|---------|
+| erf Gelu (current default) | 21% | 17% | Best available fp16 |
+| erf + nomaskinf (-10000 mask) | 9% ✅ | 26% ❌ | Mixed — worse for off_policy |
+| erf + opt_level=0 | 9% | 9% | No improvement over opt3 |
+| sigmoid + Clip | 20% | 18% | Clip insufficient |
+| INT8 (int32 accum) | 0%* | 0%* | Zero overflow but ~2-5% accuracy loss, UNTESTED on device |
+
+*INT8 overflow rate is theoretically 0% but hasn't been validated on device.
+
+### Simulator diagnosis FAILED — off-device tools can't reproduce NPU overflow
+
+**Critical finding (2026-08-12):** ALL off-device diagnostics fail to reproduce the overflow:
+
+| Tool | Result | Why |
+|------|--------|-----|
+| ONNX Runtime (fp16 inputs) | 0% overflow | Computes in fp32 internally, upcasts from fp16 |
+| RKNN simulator (target=None, CPU) | 0% overflow | CPU fp16 ≠ NPU fp16 — different hardware behavior |
+| RKNN simulator (load_rknn) | Can't run | Error: "load_rknn not support simulator" |
+| Device (real NPU) | 9-26% overflow | Only the actual NPU hardware reproduces it |
+
+**The overflow is NPU-hardware-specific.** The RK3588's dedicated fp16 units handle edge cases
+(-inf, large activations) differently than CPU. The Step 1 simulator approach from "HOW TO
+PROPERLY FIX THE MODEL" **does not work** — the simulator can't see the overflow.
+
+### What's left to try
+
+1. **INT8 models (already converted, NEED DEVICE VALIDATION)** — int32 accumulators physically
+   can't overflow. The models exist in git (`driving_on_policy_opm10v3_int8.rknn`,
+   `driving_off_policy_opm10v3_int8.rknn`). Tradeoff: ~2-5% accuracy loss on every frame.
+   **This is the most promising remaining option.** Must validate 1:1 on device before driving.
+
+2. **Mixed approach**: nomaskinf on_policy (9%) + original -inf off_policy (17%) — reduces
+   on_policy overflow without worsening off_policy. Still 17% off_policy → still phantom brake.
+
+3. **Get comma's official 0.11 model** — if comma's model doesn't overflow on this NPU, the
+   problem is OPM10V3's community weights/export, not fp16. A clean export from comma would
+   eliminate the issue entirely.
+
+4. **Accept default 0.10.3** — the only confirmed-working model. No community model (OPM10V3,
+   WMI v12) has been confirmed drivable on this car without braking issues.

@@ -39,6 +39,14 @@ class CarState(CarStateBase):
     self.is_icc_on = False
     self.has_audio_ldw = False
 
+    # MADS toggle (read once at init — same file-based pattern as selfdrived/controlsd)
+    self.mads_enabled = False
+    try:
+      with open("/data/params/MadsEnabled") as _f:
+        self.mads_enabled = _f.read().strip() == "1"
+    except (FileNotFoundError, OSError):
+      pass
+
     self.stock_ldw_steering = False
     self.stock_ldp_left = False
     self.stock_ldp_right = False
@@ -80,6 +88,9 @@ class CarState(CarStateBase):
     self.lks_aux = bool(cp_cam.vl["ADAS_LKAS"]["STOCK_LKS_AUX"])
     self.lka_enable = bool(cp_cam.vl["ADAS_LKAS"]["LKA_ENABLE"])
     self.is_icc_on = bool(cp_cam.vl["PCM_BUTTONS"]["ICC_ON"])
+    # MAIN button + gas override — used for MADS cruise_available (KA1 pattern)
+    self.acc_on_off = bool(cp_cam.vl["PCM_BUTTONS"]["ACC_ON_OFF_BUTTON"])
+    self.gas_override = bool(cp_cam.vl["PCM_BUTTONS"]["GAS_OVERRIDE"])
     self.has_audio_ldw = bool(cp_cam.vl["LKAS"]["LANE_DEPARTURE_AUDIO_RIGHT"]) or bool(
       cp_cam.vl["LKAS"]["LANE_DEPARTURE_AUDIO_LEFT"]
     )
@@ -180,7 +191,13 @@ class CarState(CarStateBase):
     ret.stockFcw = bool(cp_cam.vl["FCW"]["STOCK_FCW_TRIGGERED"])
 
     #TODO: If using car signal, S70 cannot engage, X50 gas press would make it False.
-    ret.cruiseState.available = True
+    # MADS: when enabled, available = MAIN button (ACC_ON_OFF_BUTTON) OR gas override.
+    # This matches KA1's pattern: cruise_available = bool(gas_override or ACC_ON_OFF_BUTTON).
+    # When MADS off: hardcoded True (original behavior, avoids S70/X50 engage issues).
+    if self.mads_enabled:
+      ret.cruiseState.available = bool(self.gas_override or self.acc_on_off)
+    else:
+      ret.cruiseState.available = True
 
     self.res_btn_pressed = bool(cp.vl["ACC_BUTTONS"]["RES_BUTTON"])
     prev_distance_val = self.distance_val

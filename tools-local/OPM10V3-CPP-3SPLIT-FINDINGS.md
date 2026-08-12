@@ -33,9 +33,33 @@ fp16-native UNDEFINED policy inputs — 0 only *happened* to work for default/WM
 **Caveat on the 1:1 test (`test_3split_cpp_vs_python.py`):** its synthetic inputs
 (`features_buffer = randn*0.1`, `desire_pulse = rng.choice([0,1])`) are **out-of-distribution**
 and push on_policy into fp16 overflow → `inf` in **both** Python and C++. So that test still
-"fails" but it is NOT a C++ bug (Python is also inf there). Real driving inputs stay finite.
-The test needs in-distribution inputs (or a relaxed threshold for vision's fp16 noise) to be a
-useful gate. Full validation = a real onroad drive (modeld is onroad-only; offroad it doesn't run).
+"fails" but it is NOT a C++ bug (Python is also inf there). Use `validate_opm10v3_1to1.py`
+instead (in-distribution features from real vision hidden states).
+
+## ⚠️ SEPARATE ISSUE — opm10v3 is fp16-overflow-prone (model-level, not C++)
+
+Validated 2026-08-12 with `validate_opm10v3_1to1.py` (in-distribution features = 25-timestep
+stack of real vision hidden_states, value range [-1.36, 1.36], desire=zeros):
+
+- **C++ vision == Python** (max diff 0.039, mean 0.00096, all finite, 225 frames). ✅
+- **C++ on_policy is faithful to Python**: equal overflow rate (C++ 16-18% vs Python 16%), and on
+  finite frames **92% match bit-exact** (median diff 0.000000). Fix E works.
+- **BUT the model overflows in fp16 regardless of runner** (this is the real risk, NOT the C++ bug):
+  - on_policy sigmoid (Fix A): **~20% inf** (Python and C++ equally)
+  - on_policy erf (Fix B): **~9% inf** — erf Gelu is ~2x better but not zero
+  - off_policy (Python, no erf variant): **~18% inf**
+  - On near-overflow frames, C++ and Python diverge wildly (max diff ~52000) because both compute
+    in the chaotic regime near fp16 max (65504) where ULP differences explode. This is inherent
+    fp16 numerical chaos, not a C++ defect.
+- **Fix A (±100 sigmoid-Gelu clip) is INSUFFICIENT** — it only clamps one op; other MatMul/activation
+  ops still overflow. Fix B (erf) halves it but doesn't eliminate it. off_policy has no fix.
+
+**Implication:** even with Fix E (C++ correct), opm10v3 on KA2 may produce inf/garbage plan +
+perception ~10-20% of frames in fp16 → frequent disengagements or blue. Whether REAL driving
+data triggers this (synthetic features, even smooth-temporal, may be harsher than real frames) is
+**unconfirmed — needs a real onroad drive**. If it overflows in production, opm10v3 needs a proper
+fp16-safe reconversion (clamp all overflow-prone ops, or mixed precision), not more C++ work.
+default + WMI do NOT have this issue (different, fp16-safe models).
 
 **Fix A / Fix B (model reconversion, commits 51d81ab / 8bca7e8):** the clipped-sigmoid-Gelu and
 erf-Gelu rewrites were a reasonable hypothesis (fp16 overflow in `1.702*x` before Sigmoid) and the

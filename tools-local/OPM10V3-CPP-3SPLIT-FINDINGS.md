@@ -192,14 +192,18 @@ constant-brake (see CURRENT BLOCKER). So "safe" = steering only, not lead/longit
    ≈ sigmoid (no help — off_policy overflow is NOT Gelu-driven). on_policy erf is the live default.
 2. **optimization_level=0** (erf + no fusion, TESTED 2026-08-12) — **no improvement**; overflow is in
    fp16 MatMul accumulation, not op fusion. Ruled out (`*_erf_opt0.rknn`, not used).
-3. **INT8 quantization (DONE by agent, NEEDS ONROAD TEST) — the definitive fp16-overflow fix.** Both
-   heads converted to INT8 (w8a8) with int32 accumulators. **Int32 can never overflow** (max ~2.1e9 vs
-   fp16 65,504). Tradeoff: ~2-5% accuracy loss every frame. Files: `driving_on_policy_opm10v3_int8.rknn`
-   (8.1 MB), `driving_off_policy_opm10v3_int8.rknn` (11.7 MB). RKNN I/O is now int8; Fix E's
-   pass_through=0 auto-converts fp16 input→int8 native, want_float=1 converts output back. **This kills
-   the phantom-brake** (no lead overflow). Test 1:1 before driving. **This is the current lead fix.**
-4. (alternatives if INT8 accuracy is unacceptable) SHARD activation rescaling; mixed precision (fp32 on
-   overflow layers) — see "HOW TO PROPERLY FIX THE MODEL".
+3. **INT8 quantization (agent attempt, UNVALIDATED, NOT the proper fix).** Other agent converted both
+   heads to INT8 (w8a8) — int32 accumulators physically can't overflow (max ~2.1e9 vs fp16 65,504), so
+   it WOULD stop the overflow/phantom-brake. **BUT it is a degradation, not a fix: ~2-5% accuracy loss
+   on every frame** (INT8 quantization of a model trained for fp16). It is one option to *sidestep* the
+   overflow, **not the proper fp16-safe fix** the user wants. Treat as a last-resort fallback only.
+   Files: `driving_on_policy_opm10v3_int8.rknn` (8.1 MB), `driving_off_policy_opm10v3_int8.rknn`
+   (11.7 MB). RKNN I/O is int8; Fix E's pass_through=0 should auto-convert fp16 input→int8. Untested
+   (no 1:1, no drive). Do NOT drive until validated.
+4. **The PROPER fix = fp16-safe conversion (no accuracy loss)** — the recommended path. See
+   "HOW TO PROPERLY FIX THE MODEL" below: simulator diagnosis first, then **mixed precision** (fp32 on
+   only the overflowing layers) or **targeted activation clipping**. This keeps the model's accuracy
+   while eliminating overflow — unlike INT8.
 
 ### Full model variant lineup (all in selfdrive/modeld/models/)
 
@@ -219,12 +223,13 @@ constant-brake (see CURRENT BLOCKER). So "safe" = steering only, not lead/longit
 | `driving_off_policy_opm10v3_erf_opt0.rknn` | erf | fp16 | 0 | 21.9 MB | ~9% (no improvement) |
 | **`driving_off_policy_opm10v3_int8.rknn`** | **erf** | **int8** | **3** | **11.7 MB** | **0% (impossible)** |
 
-**To swap models on device:**
+**Swap to INT8 (only as a last-resort, unvalidated fallback — ~2-5% accuracy loss):**
 ```bash
-# INT8 (zero overflow, ~2-5% accuracy loss) — kills the phantom-brake:
+# NOTE: INT8 is a degradation that sidesteps overflow, NOT the proper fix. Validate 1:1 before driving.
 cp driving_on_policy_opm10v3_int8.rknn driving_on_policy_opm10v3.rknn
 cp driving_off_policy_opm10v3_int8.rknn driving_off_policy_opm10v3.rknn
 ```
+**The proper fix (no accuracy loss) is fp16-safe conversion — see "HOW TO PROPERLY FIX THE MODEL".**
 
 ### How real driving triggers overflow — CONFIRMED (2026-08-12 drive)
 The overflow is NOT just a bench artifact — it causes the **constant-brake** drive symptom. off_policy

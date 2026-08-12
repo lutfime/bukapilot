@@ -104,9 +104,10 @@ does not gate this — the actuator guard is what actually protects.)
 
 1. **erf Gelu** — on_policy 14%→6% (helps: its overflow WAS the Gelu). off_policy erf ≈ sigmoid (~5-6%;
    no help: off_policy overflow is NOT Gelu-driven). on_policy erf is the live default.
-2. **optimization_level=0** (commit 9357c64, `*_erf_opt0.rknn`) — erf + NO op fusion. Hypothesis: level-3
-   fusion absorbs the erf/Clip into fused NPU kernels that overflow internally; level 0 keeps ops as
-   separate kernels so intermediates stay bounded between ops. **UNDER TEST** — see Current state.
+2. **optimization_level=0** (commit 9357c64, `*_erf_opt0.rknn`) — erf + NO op fusion. **TESTED
+   2026-08-12: NO improvement** (on_policy erf+opt0 = 13% vs erf = 13%, identical; off_policy 19% vs
+   22%, within noise). The hypothesis (level-3 fusion causes overflow) is WRONG — level 0 overflows
+   the same. The overflow is inherent to the model's fp16 activations, not fusion/Gelu. **Not used.**
 3. (not tried) Clip on ALL MatMul outputs; SHARD activation rescaling; mixed precision.
 
 ### Whether real driving triggers overflow — UNCONFIRMED

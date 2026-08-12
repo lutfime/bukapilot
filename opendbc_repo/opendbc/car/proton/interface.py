@@ -79,16 +79,19 @@ class CarInterface(CarInterfaceBase):
         # Low kpV[0]=0.0005 = the smooth, no-wobble/no-reengage-slam feel KA1 had (vs torque's huge low-speed kp).
         ret.lateralTuning.init("pid")
         ret.lateralTuning.pid.kpBP = [0.0, 5.0, 15.0, 25.0, 35.0]
-        # 2026-08-12: cut low-speed kp ~25-30% (0.02->0.015 @18kmh, 0.05->0.035 @54kmh). WMI v12 oversteer+oscillation
-        #   at corners (170deg corner @29kmh: +/-28deg wobble @1.3Hz; desired path smooth -> PID hunt, not model noise).
-        #   Lower kp -> less saturated output (was 0.86) -> less overshoot. Shared by ALL models (default+WMI+opm10v3).
-        # >>> REVERT TO: kpV = [0.0005, 0.02, 0.05, 0.10, 0.17]  if default model feels sluggish / understeers. <<<
-        # History: 54km/h was 0.06->0.045 (a11fb76) to damp overshoot; partial restore to 0.05 (2026-08-09). i/OUT ~70%. 90/126 km/h unchanged.
-        ret.lateralTuning.pid.kpV  = [0.0005, 0.015, 0.035, 0.10, 0.17]
+        # X70 low-speed lateral kp. 2026-08-12: tried cutting these (0.02->0.015 @18kmh, 0.05->0.035 @54kmh)
+        #   based on ONE corner's oscillation in a short WMI drive. REVERTED same day: a longer WMI drive
+        #   (route 2026-08-12--04-58-50, 100% low-speed) showed the cut caused PERVASIVE low-speed UNDER-STEER
+        #   in every corner — actual steering only 0.78x desired (median 17.3deg actual vs 20.4deg wanted),
+        #   846 driver steer-overrides. Blanket-cutting the whole low-speed band was the wrong lever; the
+        #   single corner wobble was likely model noise, not a kp problem. Lesson: don't tune from a 1-corner
+        #   short drive. If a specific corner oscillates again, tune it surgically — not the whole low-speed range.
+        # History: 54km/h was 0.06->0.045 (a11fb76), restored to 0.05 (2026-08-09). 90/126 km/h = 0.10/0.17.
+        ret.lateralTuning.pid.kpV  = [0.0005, 0.02, 0.05, 0.10, 0.17]
         ret.lateralTuning.pid.kiBP = [0.0, 5.0, 15.0, 25.0, 35.0]
-        # 2026-08-12: small low-speed ki trim (0.005->0.004 @18kmh, 0.05->0.04 @54kmh) — integrator wound to 0.34 at the WMI corner; less ki = less sustained overshoot after the corner.
-        # >>> REVERT TO: kiV = [0.001, 0.005, 0.05, 0.4, 0.5]  if low-speed steady-state offset grows. <<<
-        ret.lateralTuning.pid.kiV  = [0.001, 0.004, 0.04, 0.4, 0.5]  # earlier: 0.01->0.005 @18kmh, 0.09->0.05 @54kmh. Ends unchanged. Active after openpilot restart (CarParams re-read).
+        # ki restored to pre-cut values; the 2026-08-12 trim (0.005->0.004 / 0.05->0.04) was part of the
+        # same over-correction and is reverted with kp. Shared by ALL models (default+WMI+opm10v3).
+        ret.lateralTuning.pid.kiV  = [0.001, 0.005, 0.05, 0.4, 0.5]
         ret.lateralTuning.pid.kf = 0.0000250
       else:
         # Torque (self-tuning via locationd/torqued) — OPT-IN (toggle off). Seed = torqued-converged; torqued refines online. Stock KP_INTERP rails at low speed on this car -> wobble (see result/lateral_analysis.py).

@@ -62,10 +62,14 @@ SUPERCOMBO_METADATA_PATH = MODEL_DIR / 'driving_supercombo_metadata.pkl'
 
 # 3-file split (OPM10V3 and similar post-0.11 community models): vision + on_policy + off_policy
 VISION_3SPLIT_RKNN_PATH = MODEL_DIR / os.getenv("RKNN_3SPLIT_VISION_MODEL", "driving_vision_opm10v3.rknn")
-ON_POLICY_RKNN_PATH = MODEL_DIR / os.getenv("RKNN_3SPLIT_ON_POLICY_MODEL", "driving_on_policy_opm10v3.rknn")
+# on_policy: default to the erf-Gelu build (driving_on_policy_opm10v3_erf.rknn). erf is the EXACT
+# Gelu (sigmoid variant is only an approximation), so this is both more accurate AND more fp16-stable
+# (~6% overflow vs ~14% for sigmoid, measured 2026-08-12). Same I/O contract + perf. Set
+# RKNN_3SPLIT_ON_POLICY_MODEL=driving_on_policy_opm10v3.rknn to revert to the sigmoid build.
+ON_POLICY_RKNN_PATH = MODEL_DIR / os.getenv("RKNN_3SPLIT_ON_POLICY_MODEL", "driving_on_policy_opm10v3_erf.rknn")
 OFF_POLICY_RKNN_PATH = MODEL_DIR / os.getenv("RKNN_3SPLIT_OFF_POLICY_MODEL", "driving_off_policy_opm10v3.rknn")
 VISION_3SPLIT_METADATA_PATH = MODEL_DIR / 'driving_vision_opm10v3_metadata.pkl'
-ON_POLICY_METADATA_PATH = MODEL_DIR / 'driving_on_policy_opm10v3_metadata.pkl'
+ON_POLICY_METADATA_PATH = MODEL_DIR / 'driving_on_policy_opm10v3_metadata.pkl'  # erf shares the same I/O contract/slices
 OFF_POLICY_METADATA_PATH = MODEL_DIR / 'driving_off_policy_opm10v3_metadata.pkl'
 # WMI v12 (2-file split, community finetune of 0.10.3 policy head)
 WMI_VISION_RKNN_PATH = MODEL_DIR / os.getenv("RKNN_WMI_VISION_MODEL", "driving_vision_wmiv12.rknn")

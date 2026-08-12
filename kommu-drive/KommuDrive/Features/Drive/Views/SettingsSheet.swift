@@ -31,7 +31,7 @@ struct SettingsSheet: View {
   @State private var showForgetWifiConfirm = false
 
   var body: some View {
-    NavigationStack {
+//    NavigationStack {
       List {
         deviceSection
         softwareSettingsSection
@@ -108,7 +108,7 @@ struct SettingsSheet: View {
       } message: {
         Text(viewModel.commandError ?? "Not connected to device")
       }
-    }
+//    }
   }
 
   // MARK: Sections

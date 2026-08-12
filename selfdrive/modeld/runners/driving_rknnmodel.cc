@@ -256,11 +256,12 @@ void DrivingRKNNModel::load_model(const std::string& path, DrivingRKNNModel::Mod
     if (env_pass_through >= 0) {
       pt = env_pass_through;
     } else {
-      // No conversion needed iff our declared (framework) type AND layout already match the
-      // NPU's native format. Vision needs NHWC->NC1HWC2 (fw!=native -> pass_through=0, convert).
-      // Policy is UNDEFINED->UNDEFINED fp16 (fw==native -> pass_through=1); librknnrt's no-op
-      // conversion path for UNDEFINED is buggy -> non-deterministic inf on opm10v3 on_policy.
-      pt = (out->input_attrs[i].type == native.type && out->input_attrs[i].fmt == native.fmt) ? 1 : 0;
+      // pass_through=1 (feed our fp16 buffer raw, no conversion) ONLY when the native input is
+      // FLOAT16 AND the layout matches. Our code always writes fp16 (type=FLOAT16) into input_bufs:
+      //   fp16-native (vision NHWC->NC1HWC2 needs layout convert -> fmt mismatch -> pt=0; policy
+      //     UNDEFINED->UNDEFINED fp16 -> pt=1, skips librknnrt's buggy UNDEFINED no-op conversion)
+      //   int8-native (INT8 models) -> native != FLOAT16 -> pt=0, librknnrt converts fp16->int8.
+      pt = (native.type == RKNN_TENSOR_FLOAT16 && out->input_attrs[i].fmt == native.fmt) ? 1 : 0;
     }
     fprintf(stderr, "[RKNN-IN] %s in[%u] '%s' fw_type=%u fmt=%u | native_type=%u native_fmt=%u -> pass_through=%d\n",
             path.c_str(), i, out->input_attrs[i].name, out->input_attrs[i].type, out->input_attrs[i].fmt,

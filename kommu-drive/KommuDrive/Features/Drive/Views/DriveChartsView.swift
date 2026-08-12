@@ -185,9 +185,9 @@ struct DriveChartsView: View {
     return f
   }()
 
-  @ViewBuilder
+  @AxisContentBuilder
   private func axisMarks() -> some AxisContent {
-      AxisMarks(values: .automatic) { value in
+    AxisMarks(values: .automatic) { value in
       AxisGridLine()
       if let secs = value.as(Double.self) {
         AxisValueLabel(formatTime(secs))

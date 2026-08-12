@@ -46,14 +46,20 @@ stack of real vision hidden_states, value range [-1.36, 1.36], desire=zeros):
   finite frames **92% match bit-exact** (median diff 0.000000). Fix E works.
 - **BUT the model overflows in fp16 regardless of runner** (this is the real risk, NOT the C++ bug):
   - on_policy sigmoid (Fix A): **~20% inf** (Python and C++ equally)
-  - on_policy erf (Fix B): **~9% inf** — erf Gelu is ~2x better but not zero
-  - off_policy sigmoid: **~18% inf** (Python only in hybrid mode)
-  - off_policy erf (converted commit 2bccc2450): **~9% inf (estimated, untested)**
+  - on_policy erf (Fix B): **~15-21% inf** on synthetic features (LARGER sample = ~21%; early small-sample
+    estimates of "6-9%" were under-sampled and wrong). erf is still better than sigmoid at matching
+    input but the absolute rate is HIGH. It is SAFE to drive (see guards below) but potentially jerky.
+  - off_policy sigmoid: **~18-22% inf** (Python only in hybrid mode)
+  - off_policy erf: **no improvement** vs sigmoid (~19-22%) — off_policy overflow is NOT Gelu-driven.
   - On near-overflow frames, C++ and Python diverge wildly (max diff ~52000) because both compute
     in the chaotic regime near fp16 max (65504) where ULP differences explode. This is inherent
     fp16 numerical chaos, not a C++ defect.
+- **Synthetic overflow rates are UNRELIABLE** — they range 6-21% depending on the sample/input (random
+  images vs smooth-temporal; small vs large sample). Real driving with stable structured frames may be
+  much lower — or not. Only a real drive answers this.
 - **Fix A (±100 sigmoid-Gelu clip) is INSUFFICIENT** — it only clamps one op; other MatMul/activation
-  ops still overflow. Fix B (erf) halves it but doesn't eliminate it.
+  ops still overflow. erf helps on_policy (its overflow was partly Gelu) but does NOT help off_policy.
+  optimization_level=0 (no fusion) also does NOT help — overflow is inherent fp16 activations.
 
 ### Which outputs overflow and does it matter?
 

@@ -47,23 +47,54 @@ stack of real vision hidden_states, value range [-1.36, 1.36], desire=zeros):
 - **BUT the model overflows in fp16 regardless of runner** (this is the real risk, NOT the C++ bug):
   - on_policy sigmoid (Fix A): **~20% inf** (Python and C++ equally)
   - on_policy erf (Fix B): **~9% inf** — erf Gelu is ~2x better but not zero
-  - off_policy (Python, no erf variant): **~18% inf**
+  - off_policy sigmoid: **~18% inf** (Python only in hybrid mode)
+  - off_policy erf (converted commit 2bccc2450): **~9% inf (estimated, untested)**
   - On near-overflow frames, C++ and Python diverge wildly (max diff ~52000) because both compute
     in the chaotic regime near fp16 max (65504) where ULP differences explode. This is inherent
     fp16 numerical chaos, not a C++ defect.
 - **Fix A (±100 sigmoid-Gelu clip) is INSUFFICIENT** — it only clamps one op; other MatMul/activation
-  ops still overflow. Fix B (erf) halves it but doesn't eliminate it. off_policy has no fix.
+  ops still overflow. Fix B (erf) halves it but doesn't eliminate it.
 
-**Implication:** even with Fix E (C++ correct), opm10v3 on KA2 may produce inf/garbage plan +
-perception ~10-20% of frames in fp16 → frequent disengagements or blue. Whether REAL driving
-data triggers this (synthetic features, even smooth-temporal, may be harsher than real frames) is
-**unconfirmed — needs a real onroad drive**. If it overflows in production, opm10v3 needs a proper
-fp16-safe reconversion (clamp all overflow-prone ops, or mixed precision), not more C++ work.
+### Which outputs overflow and does it matter?
+
+| Head | Output | If it overflows | Driving impact |
+|------|--------|-----------------|----------------|
+| **on_policy** | plan (steering/accel) | inf → garbage control command | **CRITICAL** — could cause bad steering or auto-disengage |
+| off_policy | lane_lines | inf → wonky lines | UI glitch only — no driving impact |
+| off_policy | lead car | inf → wrong FCW | False/missed collision warning — annoying but not dangerous |
+| off_policy | road_edges | inf → wrong edges | UI glitch only |
+
+### ⚠️ SAFETY CONCERN: on_policy plan overflow could cause dangerous auto-disengage
+
+If on_policy plan overflows to inf, what happens depends on whether openpilot catches it:
+- **Best case**: Parser/controlsd detects inf and reuses the previous valid plan for 1 frame →
+  car keeps following, recovers next frame. This is SAFE.
+- **Worst case**: inf propagates to controlsd → invalid command → openpilot disengages.
+  **Auto-disengage is dangerous** — especially in traffic or at speed. We do NOT want this.
+
+**Before driving OPM10V3**, verify there's an inf/nan guard on the plan output. If there isn't,
+add one in `ModelState3SplitRKNN.run()` — replace inf/nan plan values with the previous valid plan.
+This is a simple ~5 line safety guard that prevents dangerous disengagements.
+
+**Recommendation:** if overflow causes frequent disengagement on a test drive, **immediately revert
+to WMI v12** (no overflow, proven safe). OPM10V3 is experimental — driving safety comes first.
+
+### Other ways to reduce overflow (no model surgery, in order of effort)
+
+1. **erf Gelu (DONE for both heads)** — halves overflow. on_policy erf committed, off_policy erf committed.
+2. **optimization_level=2** (instead of 3) in RKNN conversion — level 3 aggressively fuses ops,
+   some fusions may create overflow-prone intermediates. One-number change. Untested.
+3. **Clip on ALL MatMul outputs** — not just Gelu. Heavy (~100+ extra nodes) but catches everything.
+4. **SHARD paper approach** — static activation rescaling. Smarter than blind clipping but complex.
+5. **Mixed precision** — keep overflow-prone layers in fp32. Major RKNN config change.
+
+### Whether real driving triggers overflow — UNCONFIRMED
+
+The 9-18% rates were measured with synthetic random-ish features. Real camera data produces
+smoother, more bounded hidden_states. Overflow onroad might be 0% or 5%. **Only a real test drive
+with OPM10V3 answers this.** Start in a safe area, watch for disengagements.
+
 default + WMI do NOT have this issue (different, fp16-safe models).
-
-**Fix A / Fix B (model reconversion, commits 51d81ab / 8bca7e8):** the clipped-sigmoid-Gelu and
-erf-Gelu rewrites were a reasonable hypothesis (fp16 overflow in `1.702*x` before Sigmoid) and the
-reconverted models are kept as backups, but Fix E alone resolves the C-API inf. They do not hurt.
 
 **Fix D (global `pass_through=1`, commit 2224dbd):** the right *idea* (pass_through was the lever)
 but wrong *scope* — global `1` broke vision (which needs the NHWC→NC1HWC2 conversion). Fix E makes

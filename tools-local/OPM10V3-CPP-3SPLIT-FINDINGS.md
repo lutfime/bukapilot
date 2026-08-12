@@ -59,40 +59,61 @@ stack of real vision hidden_states, value range [-1.36, 1.36], desire=zeros):
 
 | Head | Output | If it overflows | Driving impact |
 |------|--------|-----------------|----------------|
-| **on_policy** | plan (steering/accel) | inf → garbage control command | **CRITICAL** — could cause bad steering or auto-disengage |
+| **on_policy** | plan (steering/accel) | inf in desiredCurvature | **Guarded** — absorbed by clip_curvature / caught by actuator guard (see below). Worst case: 1-frame rate-limited nudge or straight. |
 | off_policy | lane_lines | inf → wonky lines | UI glitch only — no driving impact |
 | off_policy | lead car | inf → wrong FCW | False/missed collision warning — annoying but not dangerous |
 | off_policy | road_edges | inf → wrong edges | UI glitch only |
 
-### ⚠️ SAFETY CONCERN: on_policy plan overflow could cause dangerous auto-disengage
+### ✅ SAFETY: openpilot ALREADY guards the steering path — NO modeld guard needed (researched 2026-08-12)
 
-If on_policy plan overflows to inf, what happens depends on whether openpilot catches it:
-- **Best case**: Parser/controlsd detects inf and reuses the previous valid plan for 1 frame →
-  car keeps following, recovers next frame. This is SAFE.
-- **Worst case**: inf propagates to controlsd → invalid command → openpilot disengages.
-  **Auto-disengage is dangerous** — especially in traffic or at speed. We do NOT want this.
+Earlier note (now CORRECTED) worried that an inf plan → dangerous steering / auto-disengage and
+proposed a "hold last valid plan" guard in modeld. **Research into the code shows openpilot already
+handles it — twice.** A modeld guard is redundant (and arguably worse, since holding a stale plan
+fights openpilot's natural rate-limited recovery).
 
-**Before driving OPM10V3**, verify there's an inf/nan guard on the plan output. If there isn't,
-add one in `ModelState3SplitRKNN.run()` — replace inf/nan plan values with the previous valid plan.
-This is a simple ~5 line safety guard that prevents dangerous disengagements.
+**Guard 1 — `clip_curvature`** (`selfdrive/controls/lib/drive_helpers.py`, called at
+`controlsd.py:138`) is a lateral **jerk/accel rate-limiter**:
+```python
+new_curvature = np.clip(new_curvature, prev - max_curvature_rate*DT_CTRL, prev + max_curvature_rate*DT_CTRL)
+```
+`np.clip(inf, prev-X, prev+X)` → `prev+X` (finite). So an inf `desiredCurvature` is absorbed into a
+**bounded, rate-limited curvature** — the car steers at max allowed lateral-jerk for one frame, not
+inf. (Note: `np.clip(nan, …)` returns nan — nan is NOT absorbed here, but see Guard 2.)
 
-**Recommendation:** if overflow causes frequent disengagement on a test drive, **immediately revert
-to WMI v12** (no overflow, proven safe). OPM10V3 is experimental — driving safety comes first.
+**Guard 2 — actuator isfinite** (`controlsd.py:147-155`, the backstop):
+```python
+for p in ACTUATOR_FIELDS:                       # steer, steeringAngleDeg, curvature, accel, ...
+  attr = getattr(actuators, p)
+  if isinstance(attr, Number) and not math.isfinite(attr):
+    cloudlog.error(f"actuators.{p} not finite ..."); setattr(actuators, p, 0.0)
+```
+Catches any residual `nan` → sets actuator to **0.0** (steer straight) + error log.
 
-### Other ways to reduce overflow (no model surgery, in order of effort)
+**Full trace for an overflow frame:** on_policy plan inf → `get_curvature_from_plan` (modeld.py:168,
+opm10v3 has no separate action head) → `desiredCurvature` = inf or nan → controlsd `clip_curvature`
+absorbs inf (rate-limited) / passes nan → lateral controller → actuators → isfinite guard catches
+any nan → 0.0. **The steering command is ALWAYS finite and bounded by MAX_LATERAL_JERK.** Wild/
+dangerous steering is impossible. Worst case ~6% of frames: a momentary rate-limited nudge (inf) or
+one frame of straight (nan). Safe, slightly jerky.
 
-1. **erf Gelu (DONE for both heads)** — halves overflow. on_policy erf committed, off_policy erf committed.
-2. **optimization_level=2** (instead of 3) in RKNN conversion — level 3 aggressively fuses ops,
-   some fusions may create overflow-prone intermediates. One-number change. Untested.
-3. **Clip on ALL MatMul outputs** — not just Gelu. Heavy (~100+ extra nodes) but catches everything.
-4. **SHARD paper approach** — static activation rescaling. Smarter than blind clipping but complex.
-5. **Mixed precision** — keep overflow-prone layers in fp32. Major RKNN config change.
+(`selfdrive/controls/lib/` has no other isfinite/isnan — these two guards are the ones that matter.
+`modelV2.valid` is set from calibration/frame-drop in `fill_model_msg`, NOT output finiteness, so it
+does not gate this — the actuator guard is what actually protects.)
+
+### Overflow-reduction attempts (model-level, by the reconversion agent)
+
+1. **erf Gelu** — on_policy 14%→6% (helps: its overflow WAS the Gelu). off_policy erf ≈ sigmoid (~5-6%;
+   no help: off_policy overflow is NOT Gelu-driven). on_policy erf is the live default.
+2. **optimization_level=0** (commit 9357c64, `*_erf_opt0.rknn`) — erf + NO op fusion. Hypothesis: level-3
+   fusion absorbs the erf/Clip into fused NPU kernels that overflow internally; level 0 keeps ops as
+   separate kernels so intermediates stay bounded between ops. **UNDER TEST** — see Current state.
+3. (not tried) Clip on ALL MatMul outputs; SHARD activation rescaling; mixed precision.
 
 ### Whether real driving triggers overflow — UNCONFIRMED
 
-The 9-18% rates were measured with synthetic random-ish features. Real camera data produces
-smoother, more bounded hidden_states. Overflow onroad might be 0% or 5%. **Only a real test drive
-with OPM10V3 answers this.** Start in a safe area, watch for disengagements.
+The 5-18% rates were measured with synthetic features (random images = worst case ~18%; smooth-
+temporal = ~5-6%, more realistic). Real camera data may be lower still. **Only a real test drive
+answers this.** Start in a safe area; watch for jerkiness. If bad, revert to WMI v12 (fp16-safe).
 
 default + WMI do NOT have this issue (different, fp16-safe models).
 

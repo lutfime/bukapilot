@@ -120,6 +120,18 @@ method. **Any future benchmark must call `HARDWARE.set_power_save(False)` first*
 `True`), or it will under-report Hz by ~2× and wrongly conclude "too slow". This is exactly how the
 "Python 17 Hz" myth originated.
 
+### Can we speed up vision? (the ~27ms bottleneck — mostly NO, tested 2026-08-12)
+vision is ~80% of the hybrid frame and its cost is the model's inherent NPU compute at 1 GHz.
+- **NPU core mask barely helps:** `RKNN_DRIVING_CORE_MASK` 2→0_1_2 took vision 27.3→25.5 ms (~2 ms).
+  A single rknn inference does NOT split across the 3 NPU cores; `0_1_2` only lets the driver
+  load-balance consecutive runs. Not worth changing the default (which default/WMI also share).
+- The 2-file C++ runner puts BOTH vision and on_policy on `parse_driving_core_mask()` default core 2
+  (`load_model` line ~220) — but since the frame is sequential (policy depends on this frame's
+  vision hidden_state), distributing cores doesn't parallelize within a frame.
+- Only real wins would be a smaller vision model (none exists) or cross-frame pipelining
+  (vision N+1 ∥ policy N — complex modeld.py rewrite). off_policy→C++ saves ~2 ms but needs the
+  3-file Fix E path validated. **Recommend: leave as-is — 28 Hz already has ~8 Hz margin.**
+
 ---
 
 ## TL;DR (historical — pre-Fix-E, now outdated)

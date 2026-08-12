@@ -124,61 +124,75 @@ The sigmoid Gelu approximation does `1.702 * x` before Sigmoid. In fp16, if `x >
 deterministic fp16 overflow. This suggests there may be an ADDITIONAL librknnrt initialization
 bug. But fixing the overflow is the cheapest first step.
 
-### Fix A: Clip before multiply (IMPLEMENTED, needs device test)
+### Fix D: pass_through=1 (MOST PROMISING — IMPLEMENTED, needs device test)
 
-**Status: code complete in `tools-local/rewrite_gelu_sigmoid.py`, needs reconvert + test.**
+**Status: code change in `driving_rknnmodel.cc`, needs .so rebuild + test.**
 
-Added a `Clip(-100, +100)` node before the `1.702 * x` multiply. This prevents the intermediate
-from ever exceeding fp16 range. Zero accuracy impact — sigmoid(1.702 * 100) = 1.0, so Gelu(100)
-= 100 * 1.0 = 100, identical to unclipped result. The clip only affects values that would overflow
-fp16 anyway.
+**Root cause insight:** Investigated the rknnlite wheel — it does NOT bundle its own
+`librknnrt.so`. Both Python rknnlite and our C++ `.so` call the SAME system library.
+The difference is in HOW they call it.
 
-```
-Old (4 nodes, overflows): x → Mul(x, 1.702) → Sigmoid → Mul(x, sig)
-New (5 nodes, fp16-safe): x → Clip(±100) → Mul(1.702) → Sigmoid → Mul(x, sig)
-```
+Our C++ code set `pass_through=0` on all inputs, meaning "librknnrt, please convert my
+fp16 input to the model's native format." But for OPM10V3 policy models, the input format
+attr is `UNDEFINED` — so librknnrt doesn't know what to convert FROM, and produces
+non-deterministic garbage/inf. rknnlite likely uses `pass_through=1` (skip conversion),
+bypassing this buggy code path entirely.
 
-Note: the final `Mul` uses the ORIGINAL x (not clipped), so the asymptotic behavior is correct.
+**The fix:** Changed `pass_through` from `0` to `1` (default). Now librknnrt passes our
+fp16 data directly to the NPU without trying to convert it. Our C++ code already converts
+inputs to fp16 manually (`float_to_half_array` for policy, LUT for vision), so no conversion
+is needed from librknnrt.
+
+Configurable via env var: `RKNN_PASS_THROUGH=0` reverts to old behavior.
 
 **To test:**
-1. Restore the original on_policy ONNX from `tools-local/models_store/opm10v3-onnx-original/`
-2. Re-run conversion: `python3 tools-local/convert_opm10v3_to_rknn.py` (converts all 3, or comment
-   out vision + off_policy in the MODELS list to convert on_policy only)
-3. Push new `driving_on_policy_opm10v3.rknn` to device
-4. Run the hybrid test: `python3 tools-local/test_3split_cpp_vs_python.py --frames 100`
-5. If all frames pass → C++ 2-file hybrid works with clipped on_policy
+1. Rebuild .so: `cd /data/openpilot && PATH=/usr/local/venv/bin:$PATH /usr/local/venv/bin/scons -j4 selfdrive/modeld/runners/driving_rknnmodel_pyx.so`
+   (need stub panda certs first — see build recipe in §1 above)
+2. Run test: `python3 tools-local/test_3split_cpp_vs_python.py --frames 100`
+3. If pass → inf bug fixed, no model reconversion needed
+4. If still inf → try with the Fix A Clip models (already in git)
+
+**Why this might work where Fix A/B might not:** This addresses the ACTUAL difference
+between rknnlite and C API (calling convention), not just the symptom (overflow). If
+rknnlite works because it uses pass_through=1, this fix makes our C++ code do the same.
+
+**Risk to default/WMI:** With pass_through=1, librknnrt skips format conversion for ALL
+models (including default 0.10.3). Our C++ code already handles format conversion manually
+(NCHW→NHWC for vision, fp16 cast for policy), so this should be safe. But test default
+model after rebuild to verify.
+
+### Fix A: Clip before multiply (MODELS CONVERTED, needs device test)
+
+**Status: ALL 3 models reconverted with Clip, committed in git (commit 51d81ab).**
+
+Files ready in `selfdrive/modeld/models/`:
+- `driving_vision_opm10v3.rknn` (51.6 MB, 38 Clips)
+- `driving_on_policy_opm10v3.rknn` (15.9 MB, 9 Clips)
+- `driving_off_policy_opm10v3.rknn` (22.1 MB, 21 Clips)
+
+**To test:** git pull on device → run test. No reconvert needed.
 
 **If Fix A doesn't work** (inf persists despite Clip), the cause is NOT overflow but a deeper
 librknnrt Sigmoid-op bug. Proceed to Fix B.
 
-### Fix B: erf Gelu for on_policy only (NOT YET TRIED)
+### Fix B: erf Gelu for on_policy only (MODEL CONVERTED, backup)
 
-If Fix A fails, switch on_policy to the erf Gelu rewrite. This uses completely different ONNX ops
-(`Erf + Add + Mul` instead of `Sigmoid + Mul`), avoiding whatever C API code path is buggy.
+**Status: converted and committed — `driving_on_policy_opm10v3_erf.rknn` (15.8 MB, 9 Erf nodes).**
 
-The erf rewriter already exists: `tools-local/rewrite_gelu_for_opset19.py` (legacy, not used).
-It produces 8 nodes per Gelu (slower) but the on_policy model is small (~5ms), so the overhead
-is acceptable (~15ms instead of ~5ms).
-
-**To try:**
-1. Copy `tools-local/rewrite_gelu_for_opset19.py` to `tools-local/rewrite_gelu_erf.py`
-2. Restore the original on_policy ONNX
-3. Modify `convert_opm10v3_to_rknn.py` to call `rewrite_gelu_erf.py` instead of
-   `rewrite_gelu_sigmoid.py` for on_policy only (add a per-model `gelu_rewriter` field)
-4. Convert + test same as Fix A
+If Fix A and Fix D both fail, swap in the erf model:
+```bash
+cp driving_on_policy_opm10v3_erf.rknn driving_on_policy_opm10v3.rknn
+cp driving_on_policy_opm10v3_erf_metadata.pkl driving_on_policy_opm10v3_metadata.pkl
+```
+Then retest. Uses Erf+Add+Mul instead of Sigmoid+Mul — completely different ops.
 
 Vision stays on sigmoid (it works in C++ already). off_policy stays on sigmoid (Python only).
 
-### Fix C: newer librknnrt.so (not yet investigated)
+### Fix C: newer librknnrt.so (RULED OUT)
 
-The `rockchip-linux/rknpu2` repo is "no longer maintained" and moved to
-[airockchip/rknn-toolkit2](https://github.com/airockchip/rknn-toolkit2). A newer librknnrt.so
-may fix the C API bugs (v2.3.2 has confirmed bugs per GitHub #558).
-
-Check the device: `strings /usr/lib/librknnrt.so | grep -i version`
-Compare with latest from airockchip repo.
-**WARNING:** replacing librknnrt.so is a system-level change that could break default/WMI models.
-Test thoroughly before deploying.
+Investigated: rknnlite does NOT bundle its own librknnrt.so — both Python and C API use the
+same system library. Updating the library version would not change the calling convention
+difference (pass_through) that causes the inf. Fix D (pass_through) is the correct fix.
 
 ### Previous angles (all exhausted)
 1. ~~Shared NPU memory pool~~ — per-core isolation tested, didn't help

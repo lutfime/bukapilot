@@ -238,11 +238,15 @@ void DrivingRKNNModel::load_model(const std::string& path, DrivingRKNNModel::Mod
   }
 
   memset(out->rknn_inputs.data(), 0, out->rknn_inputs.size() * sizeof(rknn_input));
+  // pass_through=1 tells librknnrt "my input is already in native format, don't convert."
+  // pass_through=0 lets librknnrt convert, but for models with fmt=UNDEFINED inputs this
+  // causes non-deterministic inf (suspected librknnrt v2.3.2 bug — rknnlite bypasses this path).
+  // Configurable via RKNN_PASS_THROUGH env var. Default=1 (skip conversion, matches rknnlite).
+  int pass_through = std::getenv("RKNN_PASS_THROUGH") ? atoi(std::getenv("RKNN_PASS_THROUGH")) : 1;
   for (uint32_t i = 0; i < out->io_num.n_input; i++) {
     out->rknn_inputs[i].index = i;
     out->rknn_inputs[i].fmt = out->input_attrs[i].fmt;
-    // Match Python RKNN "safe default" path: no explicit pass-through behavior.
-    out->rknn_inputs[i].pass_through = 0;
+    out->rknn_inputs[i].pass_through = pass_through;
     out->rknn_inputs[i].type = RKNN_TENSOR_FLOAT16;
     out->rknn_inputs[i].size = out->input_attrs[i].size;
     out->rknn_inputs[i].buf = out->input_bufs[i].data();

@@ -1,8 +1,40 @@
 # OPM10V3 C++ 3-Split Runner — Bug Findings & Reproduction (HANDOFF)
 
-> ✅ **RESOLVED 2026-08-12 — Fix E (per-input `pass_through` by native fmt).** See RESOLVED section.
-> The historical investigation (multi-context, core mask, Gelu overflow) below is kept for the
-> record, but the actual root cause was simpler: a wrong `pass_through` flag in the C++ input setup.
+> 🔴 **WHY OPM10V3 WAS BLUE ON THE DRIVE (root cause, 2026-08-12, commit 4f4d211):** a structural
+> crash in `ModelState3SplitRKNN.run()` — NOT the C++ inf or fp16 overflow. See the next section.
+> ✅ Fix E (per-input `pass_through`) resolved the C++ on_policy inf separately — see RESOLVED below.
+
+## 🔴 DRIVE-BLOCKER (root cause of blue/no-engage) — 3-split output-parse crash
+
+**Symptom (drive 2026-08-12--04-33-04):** blue LED when trying to engage; **zero `modelV2` in the
+entire rlog**; modeld "RUNNING" but crash-looping. Camera frames arrived fine ("frames out of sync").
+
+**Root cause:** `ModelState3SplitRKNN.run()` called `self.parser.parse_vision_outputs()` on the
+**vision-only** output. In the 3-split, the vision head has `pose/road_transform/hidden_state/...`
+but **NOT `lane_lines`/`lead`/`road_edges`** (those moved to `off_policy`). `parse_vision_outputs`
+→ `parse_mdn('lane_lines')` → `check_missing('lane_lines')` raised `ValueError: Missing output
+lane_lines` on the first frame → propagated to `main()` (not caught) → **modeld crashed every
+frame** → manager restarted it → no `modelV2` ever published → controlsd had no model → blue.
+(Logged once because cloudlog throttles the repeated crash.)
+
+```
+modeld.py:1121  model.run(...)
+modeld.py:852   vision_outputs_dict = self.parser.parse_vision_outputs(slice(vision_output, ...))
+parse_model_outputs.py:99   parse_mdn('lane_lines', ...)
+parse_model_outputs.py:27   raise ValueError("Missing output lane_lines")  -> crash
+```
+
+**Fix (commit 4f4d211):**
+1. `ModelState3SplitRKNN` parser → `Parser(ignore_missing=True)` so `parse_vision_outputs` on the
+   vision dict skips `lane_lines/lead/road_edges` (vision-only outputs like `pose/road_transform`
+   still parse; `hidden_state` preserved for the features queue).
+2. After `parse_policy_outputs(off_policy)`, also run `parse_vision_outputs(off_policy_dict)` to
+   parse the perception head (`lane_lines/road_edges/lead/*_prob`) that lives in off_policy.
+
+**Verified locally:** vision parse no longer crashes + keeps hidden_state; off_policy perception
+parses (lane_lines/road_edges/lead present); merged output has lane_lines (off_policy) + plan
+(on_policy) + pose (vision). This is independent of the fp16 overflow (which remains safe-guarded).
+**Needs an onroad re-test once deployed** (device was offline when fixed).
 
 ## RESOLVED — Fix E: per-input `pass_through` based on native fmt (THE FIX)
 

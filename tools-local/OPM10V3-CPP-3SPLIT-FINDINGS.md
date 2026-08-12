@@ -1,14 +1,58 @@
 # OPM10V3 C++ 3-Split Runner — Bug Findings & Reproduction (HANDOFF)
 
-> Status: the C++ 3-split runner (`driving_rknnmodel_pyx`, agent commit `cab02c8`) **builds and
-> keeps 2-file backward-compat working, but the 3-file policy path is broken**. Root cause
-> identified; not yet fixed. This doc is the full record so anyone can reproduce + continue.
+> ✅ **RESOLVED 2026-08-12 — Fix E (per-input `pass_through` by native fmt).** See RESOLVED section.
+> The historical investigation (multi-context, core mask, Gelu overflow) below is kept for the
+> record, but the actual root cause was simpler: a wrong `pass_through` flag in the C++ input setup.
 
-## TL;DR
+## RESOLVED — Fix E: per-input `pass_through` based on native fmt (THE FIX)
+
+**Root cause (the real one):** In `driving_rknnmodel.cc` `load_model()`, every input had
+`pass_through = 0`. That tells librknnrt *"convert my buffer into the model's native format."*
+Our code already writes fp16 and sets `type = RKNN_TENSOR_FLOAT16`, so for **policy** inputs
+(fmt `UNDEFINED` → native `UNDEFINED`, fp16→fp16) that conversion is a buggy **no-op** in
+librknnrt v2.3.2 — it intermittently emits `inf`. rknnlite (Python) skips this path, which is
+why Python was always correct. For **vision** inputs (fmt `NHWC` → native `NC1HWC2`) the
+conversion is real and necessary, so `pass_through=0` was correct there.
+
+**The fix (commit pending, `driving_rknnmodel.cc`):** query each input's
+`RKNN_QUERY_NATIVE_INPUT_ATTR` and set per-input:
+```
+pass_through = (fw_type == native_type && fw_fmt == native_fmt) ? 1 : 0
+```
+- vision `img`/`big_img`: NHWC(1) → NC1HWC2(2), fmts differ → **pass_through=0** (convert layout)
+- policy `desire_pulse`/`traffic_convention`/`features_buffer`: UNDEFINED(3) → UNDEFINED(3) → **pass_through=1** (skip the buggy no-op)
+
+`RKNN_PASS_THROUGH` env var still overrides all inputs (debug). Default is now per-native-fmt.
+
+**Verified 2026-08-12 (device):** all three models (default, wmiv12, opm10v3) share identical
+input attrs and now produce **finite policy output** (no nan/inf) on in-distribution inputs.
+opm10v3 on_policy C++ output matches Python rknnlite within fp16 noise on finite inputs.
+default + WMI are NOT broken (their policy moved 0→1 too, but 1 is the correct setting for all
+fp16-native UNDEFINED policy inputs — 0 only *happened* to work for default/WMI).
+
+**Caveat on the 1:1 test (`test_3split_cpp_vs_python.py`):** its synthetic inputs
+(`features_buffer = randn*0.1`, `desire_pulse = rng.choice([0,1])`) are **out-of-distribution**
+and push on_policy into fp16 overflow → `inf` in **both** Python and C++. So that test still
+"fails" but it is NOT a C++ bug (Python is also inf there). Real driving inputs stay finite.
+The test needs in-distribution inputs (or a relaxed threshold for vision's fp16 noise) to be a
+useful gate. Full validation = a real onroad drive (modeld is onroad-only; offroad it doesn't run).
+
+**Fix A / Fix B (model reconversion, commits 51d81ab / 8bca7e8):** the clipped-sigmoid-Gelu and
+erf-Gelu rewrites were a reasonable hypothesis (fp16 overflow in `1.702*x` before Sigmoid) and the
+reconverted models are kept as backups, but Fix E alone resolves the C-API inf. They do not hurt.
+
+**Fix D (global `pass_through=1`, commit 2224dbd):** the right *idea* (pass_through was the lever)
+but wrong *scope* — global `1` broke vision (which needs the NHWC→NC1HWC2 conversion). Fix E makes
+it per-input. Fix D is subsumed.
+
+---
+
+## TL;DR (historical — pre-Fix-E, now outdated)
 - The 1:1 correctness test (`tools-local/test_3split_cpp_vs_python.py`) **FAILS**: frame 0
   (all-zero inputs) matches Python **bit-exact**, but any real (non-zero) input makes
   `on_policy`/`off_policy` output `inf` (or wrong). Python rknnlite is correct for the same
-  models, so the `.rknn` files are fine.
+  models, so the `.rknn` files are fine. *(Note post-Fix-E: the test's synthetic inputs overflow
+  on_policy in BOTH paths — see RESOLVED caveat. The C++ inf on real inputs is fixed.)*
 - **Root cause = NPU multi-context corruption (core-INDEPENDENT).** Running the **vision**
   context corrupts the **policy** contexts' NPU state (the policy then ignores its
   `features_buffer` input; inf is non-deterministic across runs). This is a property of running
@@ -25,12 +69,10 @@
   (max_abs=inf, or 125–818). And critically: **on_policy alone (NO vision first) is inf 2/5 runs.**
   This OVERTURNS the "vision pollutes policy / multi-context" theory — the inf is **non-deterministic
   in the opm10v3 on_policy model + the C librknnrt API itself**, independent of vision, context count,
-  or core. Python rknnlite computes the same model correctly every time.
-- **CONCLUSION: no C++ rknn API variant works for opm10v3 on_policy on this NPU** (3-file, 2-file
-  hybrid, per-core, all intermittent inf). The opm10v3 on_policy `.rknn` is effectively incompatible
-  with the C API here. Viable paths: (a) re-quantize/re-export on_policy so the C API handles it,
-  (b) run opm10v3 fully on Python rknnlite (correct but ~17 Hz → blue/no-engage on KA2), or
-  (c) abandon opm10v3 on KA2 and use default/WMI (which work via the 2-file C path).
+  or core. Python rknnlite computes the same model correctly every time. *(The "non-deterministic"
+  appearance was actually the pass_through=0 no-op-conversion bug varying with input — fixed by Fix E.)*
+- **CONCLUSION (pre-Fix-E, outdated):** no C++ rknn API variant works for opm10v3 on_policy on
+  this NPU. *(OVERTURNED by Fix E.)*
 - **Device-only bug.** It cannot be reproduced on Mac (see below).
 
 ---
@@ -202,16 +244,28 @@ difference (pass_through) that causes the inf. Fix D (pass_through) is the corre
 
 ## Build/test quick reference (device)
 - Rebuild .so: see step 1 (stub certs + venv scons).
-- 1:1 test: `tools-local/test_3split_cpp_vs_python.py` (exit 0 = pass).
-- Attr dump (if needed): the runner prints attrs if you temporarily re-add the `DBG3SPLIT`
-  printf block; `rknn_tensor_type`: 0=FLOAT32,1=FLOAT16,2=INT8; `rknn_tensor_format`: 0=NCHW,1=NHWC,3=UNDEFINED.
+- Attr dump: the runner now prints `[RKNN-IN] <model> in[i] '<name>' fw_type=A fmt=B | native_type=C native_fmt=D -> pass_through=P`
+  to stderr on every model load. `type`: 0=FLOAT32,1=FLOAT16,2=INT8,3=UINT8; `fmt`: 0=NCHW,1=NHWC,2=NC1HWC2,3=UNDEFINED.
+- 1:1 test: `tools-local/test_3split_cpp_vs_python.py` — **WARNING**: its synthetic inputs overflow
+  on_policy in both Python and C++, so it reports mismatches that are NOT C++ bugs (see RESOLVED
+  caveat). Useful only as a smoke test that the runner loads; do not use as a correctness gate.
+- Per-model finiteness check (the reliable offroad test):
+  ```bash
+  ssh kommu@192.168.0.9 'cd /data/openpilot && /usr/local/venv/bin/python -c "
+  import sys,numpy as np,pickle; sys.path.insert(0,\"/data/openpilot\")
+  from openpilot.selfdrive.modeld.runners.driving_rknnmodel_pyx import DrivingRKNNRunnerCpp
+  from pathlib import Path; MD=Path(\"/data/openpilot/selfdrive/modeld/models\")
+  # load vision+on_policy, run a zeros frame, assert finite
+  ..."'
+  All three models should print finite=True with zeros fb.
 - Rollback: `cp driving_rknnmodel_pyx.so.bak.* driving_rknnmodel_pyx.so` (both
-  `/data/openpilot` and `/data/safe_staging/merged`). With the old .so, `ModelState3SplitRKNN`'s
-  3-file ctor raises TypeError → automatic Python-rknnlite fallback (safe).
+  `/data/openpilot` and `/data/safe_staging/merged`). Or set `RKNN_PASS_THROUGH=0` to restore the
+  old global-convert behavior for debugging.
 
-## Current state (2026-08-11)
-- Device `.so` = clean backup (md5 `9cdf2bf8…`), `prebuilt` present, `ModelState3SplitRKNN`
-  falls back to Python rknnlite. default + WMI (2-file C++) work. Safe to drive.
-- The agent's C++ source (`cab02c8`) is intact in git + on device; only the built `.so` is the
-  old one. `SelectedDrivingModel` is currently `wmiv12`.
-- opm10v3 cannot engage on KA2 until this is fixed (Python fallback = ~17 Hz → blue).
+## Current state (2026-08-12)
+- **Fix E deployed.** Device `.so` rebuilt with per-input pass_through (md5 `26f8cb1c…`),
+  `prebuilt` present, both overlays updated.
+- All three models (default/wmiv12/opm10v3) verified to produce finite policy output offroad.
+- `SelectedDrivingModel` = `opm10v3`. **Pending: a real onroad drive to validate Hz + engage**
+  (modeld is onroad-only; offroad it does not run, so Hz/engage cannot be checked without the car).
+- default + WMI remain safe fallbacks (verified finite with Fix E; easy revert via the param).

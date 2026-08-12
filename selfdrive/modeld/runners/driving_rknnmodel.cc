@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -238,15 +239,35 @@ void DrivingRKNNModel::load_model(const std::string& path, DrivingRKNNModel::Mod
   }
 
   memset(out->rknn_inputs.data(), 0, out->rknn_inputs.size() * sizeof(rknn_input));
-  // pass_through=1 tells librknnrt "my input is already in native format, don't convert."
-  // pass_through=0 lets librknnrt convert, but for models with fmt=UNDEFINED inputs this
-  // causes non-deterministic inf (suspected librknnrt v2.3.2 bug — rknnlite bypasses this path).
-  // Configurable via RKNN_PASS_THROUGH env var. Default=1 (skip conversion, matches rknnlite).
-  int pass_through = std::getenv("RKNN_PASS_THROUGH") ? atoi(std::getenv("RKNN_PASS_THROUGH")) : 1;
+  // PER-INPUT pass_through (Fix E). Our code always writes fp16 into input_bufs (type=FLOAT16).
+  //   native input is fp16  -> pass_through=1: feed our fp16 raw. librknnrt's fp16->fp16
+  //     "conversion" (pass_through=0) is buggy for fmt=UNDEFINED inputs -> non-deterministic inf
+  //     on opm10v3 on_policy. rknnlite skips conversion, which is why Python always works.
+  //   native input is quantized (int8/uint8 image) -> pass_through=0: let librknnrt convert
+  //     our fp16 -> native quantized. pass_through=1 would feed raw fp16 -> wrong vision output.
+  // RKNN_PASS_THROUGH env overrides ALL inputs (debug only); unset = per-native-type.
+  const char* env_pt = std::getenv("RKNN_PASS_THROUGH");
+  int env_pass_through = env_pt ? atoi(env_pt) : -1;  // -1 = unset -> per-native-type
   for (uint32_t i = 0; i < out->io_num.n_input; i++) {
+    rknn_tensor_attr native = {};
+    native.index = i;
+    rknn_query(out->ctx, RKNN_QUERY_NATIVE_INPUT_ATTR, &native, sizeof(rknn_tensor_attr));
+    int pt;
+    if (env_pass_through >= 0) {
+      pt = env_pass_through;
+    } else {
+      // No conversion needed iff our declared (framework) type AND layout already match the
+      // NPU's native format. Vision needs NHWC->NC1HWC2 (fw!=native -> pass_through=0, convert).
+      // Policy is UNDEFINED->UNDEFINED fp16 (fw==native -> pass_through=1); librknnrt's no-op
+      // conversion path for UNDEFINED is buggy -> non-deterministic inf on opm10v3 on_policy.
+      pt = (out->input_attrs[i].type == native.type && out->input_attrs[i].fmt == native.fmt) ? 1 : 0;
+    }
+    fprintf(stderr, "[RKNN-IN] %s in[%u] '%s' fw_type=%u fmt=%u | native_type=%u native_fmt=%u -> pass_through=%d\n",
+            path.c_str(), i, out->input_attrs[i].name, out->input_attrs[i].type, out->input_attrs[i].fmt,
+            native.type, native.fmt, pt);
     out->rknn_inputs[i].index = i;
     out->rknn_inputs[i].fmt = out->input_attrs[i].fmt;
-    out->rknn_inputs[i].pass_through = pass_through;
+    out->rknn_inputs[i].pass_through = pt;
     out->rknn_inputs[i].type = RKNN_TENSOR_FLOAT16;
     out->rknn_inputs[i].size = out->input_attrs[i].size;
     out->rknn_inputs[i].buf = out->input_bufs[i].data();

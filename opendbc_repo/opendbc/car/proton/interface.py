@@ -97,7 +97,7 @@ class CarInterface(CarInterfaceBase):
         # Torque (self-tuning via locationd/torqued) — OPT-IN (toggle off). Seed = torqued-converged; torqued refines online. Stock KP_INTERP rails at low speed on this car -> wobble (see result/lateral_analysis.py).
         ret.lateralTuning.init("torque")
         ret.lateralTuning.torque.latAccelFactor = 1.44
-        ret.lateralTuning.torque.friction = 0.14  # 2026-08-12: reverted 0.07->0.14. The 0.07 (halved for #25569 wobble) was too low -> torque controller under-compensated the EPS static-friction deadband -> steering RELEASED (output collapsed to ~0 a few seconds after engage). Back to 0.14 (the value that held).
+        ret.lateralTuning.torque.friction = 0.07  # halved from 0.14 per openpilot #25569 (low-speed lateral oscillation). NOT the cause of the steering-release (that was STEER_DELTA — friction is torque-only, doesn't affect PID). Restored to 0.07.
         ret.lateralTuning.torque.latAccelOffset = -0.02
         ret.lateralTuning.torque.steeringAngleDeadzoneDeg = 0.0
     elif candidate == CAR.PROTON_X90:

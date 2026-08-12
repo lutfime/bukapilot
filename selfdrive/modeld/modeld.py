@@ -828,7 +828,11 @@ class ModelState3SplitRKNN:
     self.vision_output = np.zeros(self._vision_output_size, dtype=np.float32)
     self.on_policy_output = np.zeros(self._on_policy_output_size, dtype=np.float32)
     self.off_policy_output = np.zeros(self._off_policy_output_size, dtype=np.float32)
-    self.parser = Parser()
+    # 3-split: outputs are split across heads — vision has pose/road_transform/hidden_state but NOT
+    # lane_lines/lead/road_edges (those live in off_policy). ignore_missing so parse_vision_outputs on
+    # the vision-only dict skips them instead of crashing (ValueError: Missing output lane_lines).
+    # off_policy's perception head is parsed separately in run() (see parse_vision_outputs there).
+    self.parser = Parser(ignore_missing=True)
 
   def slice_outputs(self, model_outputs: np.ndarray, output_slices: dict[str, slice]) -> dict[str, np.ndarray]:
     return {k: model_outputs[np.newaxis, v] for k, v in output_slices.items()}
@@ -897,6 +901,10 @@ class ModelState3SplitRKNN:
     off_policy_dict = self.parser.parse_policy_outputs(
       self.slice_outputs(self.off_policy_output, self.off_policy_output_slices)
     )
+    # off_policy also carries the perception head (lane_lines, road_edges, lead, *_prob) that the
+    # vision head lacks in this 3-split — parse those here. ignore_missing skips vision-only outputs
+    # (pose/road_transform) not present in off_policy.
+    off_policy_dict = self.parser.parse_vision_outputs(off_policy_dict)
 
     # 5. Drop off_policy's plan — on_policy plan wins (verified from sunnypilot source)
     if 'plan' in off_policy_dict and 'plan' in on_policy_dict:

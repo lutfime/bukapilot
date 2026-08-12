@@ -30,6 +30,8 @@ NcZvzke7rrW6ao064UW/AAAADmtvbW11ZHJpdmUtYXBwAQIDBAUGBw==
 
   private let interfacePath = "/data/safe_staging/merged/opendbc_repo/opendbc/car/proton/interface.py"
   private let lowerPath = "/data/openpilot/opendbc_repo/opendbc/car/proton/interface.py"
+  private let valuesPath = "/data/safe_staging/merged/opendbc_repo/opendbc/car/proton/values.py"
+  private let valuesLower = "/data/openpilot/opendbc_repo/opendbc/car/proton/values.py"
   private let modeldPath = "/data/safe_staging/merged/selfdrive/modeld/modeld.py"
   private let modeldLower = "/data/openpilot/selfdrive/modeld/modeld.py"
 
@@ -290,6 +292,33 @@ if start is not None:
                 out.append({'line': i + 1, 'raw': raw, 'value': val, 'key': p, 'file': 'interface'})
                 break
 
+# 1b. Read values.py X70 block for CAN torque rate limits (STEER_DELTA_*)
+vpath = '\(valuesPath)'
+with open(vpath) as f:
+    vlines = f.readlines()
+vstart = None
+for i, l in enumerate(vlines):
+    if 'CP.carFingerprint == CAR.PROTON_X70' in l:
+        vstart = i
+        break
+if vstart is not None:
+    vend = len(vlines)
+    for i in range(vstart + 1, len(vlines)):
+        stripped = vlines[i].rstrip()
+        if stripped.startswith('    elif ') or stripped == '    else:':
+            vend = i
+            break
+    vpatterns = ['STEER_DELTA_UP', 'STEER_DELTA_DOWN']
+    for i in range(vstart, vend):
+        raw = vlines[i].rstrip('\\n')
+        for p in vpatterns:
+            if p in raw and '=' in raw:
+                val = raw.split('=', 1)[1].strip()
+                if '#' in val:
+                    val = val.split('#', 1)[0].strip()
+                out.append({'line': i + 1, 'raw': raw, 'value': val, 'key': p, 'file': 'values'})
+                break
+
 # 2. Read LAT_SMOOTH_SECONDS from modeld.py (try both paths)
 for modeld in ['\(modeldPath)', '\(modeldLower)']:
     try:
@@ -359,6 +388,8 @@ print(json.dumps(out))
     if key.contains("LAT_SMOOTH_SECONDS")        { return ("LAT_SMOOTH_SECONDS (s)", "Lateral") }
     if key.contains("steerRatio")                { return ("steerRatio", "Steer") }
     if key.contains("steerActuatorDelay")        { return ("steerActuatorDelay (s)", "Steer") }
+    if key.contains("STEER_DELTA_UP")            { return ("STEER_DELTA_UP (CAN units/frame)", "Steer") }
+    if key.contains("STEER_DELTA_DOWN")          { return ("STEER_DELTA_DOWN (CAN units/frame)", "Steer") }
     if key.contains("longitudinalActuatorDelay") { return ("longitudinalActuatorDelay (s)", "Longitudinal") }
     if key.contains("longitudinalTuning.kpV")    { return ("kpV (proportional)", "Longitudinal") }
     if key.contains("longitudinalTuning.kiV")    { return ("kiV (integral)", "Longitudinal") }
@@ -392,8 +423,13 @@ print(json.dumps(out))
   /// is never touched. No corruption is possible.
   func saveTuningLine(lineNum: Int, rawLine: String, newValue: String, file: String = "interface") async -> (ok: Bool, detail: String) {
     let valB64 = Data(newValue.utf8).base64EncodedString()
-    let path = file == "modeld" ? modeldPath : interfacePath
-    let lower = file == "modeld" ? modeldLower : lowerPath
+    let path: String
+    let lower: String
+    switch file {
+    case "modeld": path = modeldPath; lower = modeldLower
+    case "values": path = valuesPath; lower = valuesLower
+    default: path = interfacePath; lower = lowerPath
+    }
     let script = """
 /usr/local/venv/bin/python3 -c "
 import base64

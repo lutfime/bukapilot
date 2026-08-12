@@ -122,6 +122,11 @@ class CarControllerParams:
     if CP.carFingerprint == CAR.PROTON_X90:
       self.STEER_DELTA_UP = 4
       self.STEER_DELTA_DOWN = 8
+    elif CP.carFingerprint == CAR.PROTON_X70:
+      self.STEER_DELTA_UP = 15
+      # 2026-08-12: DOWN 35->45 — corner-exit wobble showed CAN torque lagging PID on unwind
+      # (15/35); faster unwind only, UP unchanged. If still laggy, try UP=18 next.
+      self.STEER_DELTA_DOWN = 45
     else:
       self.STEER_DELTA_UP = 15
       self.STEER_DELTA_DOWN = 35

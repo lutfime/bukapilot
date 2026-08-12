@@ -124,9 +124,13 @@ class CarControllerParams:
       self.STEER_DELTA_DOWN = 8
     elif CP.carFingerprint == CAR.PROTON_X70:
       self.STEER_DELTA_UP = 15
-      # 2026-08-12: DOWN 35->45 — corner-exit wobble showed CAN torque lagging PID on unwind
-      # (15/35); faster unwind only, UP unchanged. If still laggy, try UP=18 next.
-      self.STEER_DELTA_DOWN = 45
+      # 2026-08-12: REVERTED DOWN 45->35. The 45 (faster unwind for corner-exit wobble) changed
+      # the steering feel -> driver steered ~2x more (29%->51% steeringPressed) -> X70 cancels
+      # cruise on steering -> pcmDisable -> OP disengaged after only a few seconds (was 552s
+      # engagements with 35). Reverting restores the working feel. Corner-exit wobble (the
+      # reason for 45) is the lesser evil vs the disengage regression. See drive comparison
+      # 08-19-24 (35, worked) vs 10-52-57 (45, broken). NEVER tune STEER_DELTA for feel.
+      self.STEER_DELTA_DOWN = 35
     else:
       self.STEER_DELTA_UP = 15
       self.STEER_DELTA_DOWN = 35

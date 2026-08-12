@@ -97,7 +97,7 @@ class CarInterface(CarInterfaceBase):
         # Torque (self-tuning via locationd/torqued) — OPT-IN (toggle off). Seed = torqued-converged; torqued refines online. Stock KP_INTERP rails at low speed on this car -> wobble (see result/lateral_analysis.py).
         ret.lateralTuning.init("torque")
         ret.lateralTuning.torque.latAccelFactor = 1.44
-        ret.lateralTuning.torque.friction = 0.14
+        ret.lateralTuning.torque.friction = 0.07  # was 0.14; halved per openpilot #25569 (low-speed lateral oscillation fix: "~½ friction reduces oscillation"). High friction over-compensates the EPS static-friction deadband -> overshoot -> oscillation at low-speed corners.
         ret.lateralTuning.torque.latAccelOffset = -0.02
         ret.lateralTuning.torque.steeringAngleDeadzoneDeg = 0.0
     elif candidate == CAR.PROTON_X90:

@@ -457,6 +457,32 @@ class SelfdriveD:
     if self.enabled and not self.active and CS.leftBlinker != CS.rightBlinker and not CS.standstill and not CS.lkaDisabled:
       self.events.add(EventName.blinkerSteerRequired)
 
+    # MADS (FrogPilot-style): engage lateral in cruise standby and stay engaged.
+    # MUST be at the END of update_events (after all events are built, before
+    # state_machine.update runs in step()). Previously this was in data_sample
+    # which runs BEFORE update_events — but update_events starts with
+    # self.events.clear(), wiping the pcmEnable we injected.
+    #
+    # 1. When not yet enabled: inject pcmEnable to trigger engagement.
+    # 2. When enabled: strip the disengage events that fire because stock ACC is off.
+    #
+    #    NOTE: pedalPressed is NOT stripped — brake must ALWAYS disengage. Gas is
+    #    already gated by `gas_disengage and not self.lat_only` earlier in this
+    #    function. Brake-induced pedalPressed flows through and fires USER_DISABLE.
+    if self.lat_only:
+      if not self.enabled:
+        self.events.add(EventName.pcmEnable)
+      for ev in (EventName.pcmDisable, EventName.buttonCancel,
+                 EventName.cruiseDisabled):
+        try:
+          self.events.events.remove(ev)
+        except ValueError:
+          pass
+
+    # MADS DEBUG LOGGING (temporary)
+    if self.mads_enabled and self.sm.frame % 50 == 0:
+      cloudlog.warning(f"MADS_DEBUG frame={self.sm.frame}: mads={self.mads_enabled} lat_only={self.lat_only} enabled={self.enabled} cruise_avail={CS.cruiseState.available} cruise_enabled={CS.cruiseState.enabled} gear={CS.gearShifter} events_count={len(self.events.events)}")
+
   def data_sample(self):
     _car_state = messaging.recv_one(self.car_state_sock)
     CS = _car_state.carState if _car_state else self.CS_prev
@@ -526,35 +552,6 @@ class SelfdriveD:
     if self.enabled and not self.lat_only and any(not ps.controlsAllowed for ps in self.sm['pandaStates']
            if ps.safetyModel not in IGNORED_SAFETY_MODES):
       self.mismatch_counter += 1
-
-    # MADS (FrogPilot-style): engage lateral in cruise standby and stay engaged.
-    # 1. When not yet enabled: inject pcmEnable to trigger engagement (same event
-    #    the SET button would fire). This transitions disabled → enabled in the
-    #    state machine.
-    # 2. When enabled: strip the disengage events that fire because stock ACC is off.
-    #
-    #    NOTE: pedalPressed is NOT stripped — brake must ALWAYS disengage. Gas is
-    #    already gated by `gas_disengage and not self.lat_only` earlier in this
-    #    function. Brake-induced pedalPressed flows through and fires USER_DISABLE.
-    #
-    #    NOTE: controlsMismatch is NOT stripped here — it's handled at the source
-    #    (the mismatch_counter increment is skipped when lat_only). Safety-model
-    #    mismatches and rxCheck failures still fire controlsMismatch normally.
-    # MADS DEBUG LOGGING (temporary)
-    # NOTE: do NOT re-import cloudlog here — a local `from ... import cloudlog` shadows the
-    # module-level import for the whole data_sample() scope and makes the cloudlog.event() call
-    # above (line ~501, runs at init) raise UnboundLocalError -> selfdrived crash -> no engage (yellow).
-    if self.mads_enabled and self.sm.frame % 50 == 0:
-      cloudlog.warning(f"MADS_DEBUG frame={self.sm.frame}: mads={self.mads_enabled} lat_only={self.lat_only} enabled={self.enabled} cruise_avail={CS.cruiseState.available} cruise_enabled={CS.cruiseState.enabled} gear={CS.gearShifter} events_count={len(self.events.events)}")
-    if self.lat_only:
-      if not self.enabled:
-        self.events.add(EventName.pcmEnable)
-      for ev in (EventName.pcmDisable, EventName.buttonCancel,
-                 EventName.cruiseDisabled):
-        try:
-          self.events.events.remove(ev)
-        except ValueError:
-          pass
 
     return CS
 

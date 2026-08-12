@@ -69,6 +69,57 @@ reconverted models are kept as backups, but Fix E alone resolves the C-API inf. 
 but wrong *scope* — global `1` broke vision (which needs the NHWC→NC1HWC2 conversion). Fix E makes
 it per-input. Fix D is subsumed.
 
+## Performance — do we even need C++? (benchmarked 2026-08-12)
+
+**Short answer: no, not strictly.** All-Python opm10v3 runs at **22.7 Hz** in onroad-equivalent
+(performance) mode — above the 20 Hz engage threshold. The original "~17 Hz Python = too slow =
+blue" justification for the C++ runner was **power-save-inflated** (see GOTCHA below). C++ buys Hz
+margin, not correctness.
+
+**Per-op inference (clean, isolated, PERFORMANCE / 8-core mode):**
+| op | runner | ms | Hz |
+|---|---|---|---|
+| vision | C++ | 27.8 | 36 |
+| on_policy (erf) | C++ | 5.7 | 175 |
+| on_policy (erf) | Python rknnlite | 6.4 | 157 |
+| off_policy | Python rknnlite | 8.1 | 123 |
+
+→ The policy heads are tiny either way (C++ on_policy saves ~0.6 ms vs Python — nothing). Vision is
+the only real cost, and opm10v3 vision (28 ms) is actually **faster than default (35 ms)**.
+
+**Full frame (vision + on_policy + off_policy), PERFORMANCE mode:**
+| mode | ms/frame | Hz |
+|---|---|---|
+| **All-Python** (Driving3SplitRKNNRunner) | 44.0 | **22.7** |
+| **Hybrid C++/Python** (current prod) | 35.4 | 28.2 |
+| → C++ saves | 8.6 | 5.5 |
+
+**Tradeoff:**
+- All-Python: **simpler** (no .so, no Fix E, no scons/cythonize/stub-cert rebuild chain) and rknnlite
+  never had the pass_through inf bug. BUT only ~2.7 Hz margin over 20; production adds CL-transform +
+  frame I/O + publish overhead, so real-world all-Python sits near the ~20 Hz blue edge.
+- Hybrid C++: ~8 Hz margin (safer against heat/overhead), at the cost of the C++ build/rebuild chain.
+- **Either way the Hz is not the blocker — the fp16 overflow (above) is.** Switching to all-Python
+  (`os.environ["RKNN_USE_PYTHON"]="1"` in ModelState3SplitRKNN, or set the env at launch) removes the
+  .so dependency entirely. Recommended only if build friction outweighs the Hz margin.
+
+### ⚠️ GOTCHA — always benchmark in performance mode (8 cores), not offroad power-save
+`run_vision` does CPU work (uint8→fp16 transform + buffer copies) on top of NPU inference. The **NPU
+is fixed at 1 GHz** (set at boot by `Ka2.initialize_hardware` via `/sys/class/devfreq/fdab0000.npu`
+userspace — NOT affected by power mode). But the **CPU big cores (5-7) are OFF offroad**
+(`Ka2.set_power_save(True)`), and the CPU governor drops to `ondemand`. Result: offroad benchmarks
+are ~2× slower than onroad:
+
+| mode | cores | default vision | opm10v3 vision |
+|---|---|---|---|
+| offroad power-save | 5 | 74 ms (13 Hz) | 59 ms (17 Hz) |
+| performance / onroad | 8 | 35 ms (28 Hz) | 28 ms (36 Hz) |
+
+The onroad default-vision 35 ms matches the MODEL-CONVERSION-GUIDE's "32.8 ms" — confirming the
+method. **Any future benchmark must call `HARDWARE.set_power_save(False)` first** (then restore
+`True`), or it will under-report Hz by ~2× and wrongly conclude "too slow". This is exactly how the
+"Python 17 Hz" myth originated.
+
 ---
 
 ## TL;DR (historical — pre-Fix-E, now outdated)

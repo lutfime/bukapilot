@@ -84,7 +84,7 @@ class CarInterface(CarInterfaceBase):
         # kp: 1.5x the pre-retune values (compensates for STEER_DELTA_UP 10 vs old 15 = 33% slower ramp).
         #     Data-driven: target output 0.4 / current 0.27 = 1.49x. Confirms the 15/10 STEER_DELTA ratio.
         # Old kpV was [0.0005, 0.02, 0.05, 0.10, 0.17]. >>> REVERT TO THAT if overshoot/wobble returns. <<<
-        ret.lateralTuning.pid.kpV  = [0.0005, 0.03, 0.075, 0.15, 0.25]
+        ret.lateralTuning.pid.kpV  = [0.0005, 0.03, 0.09, 0.15, 0.25]
         ret.lateralTuning.pid.kiBP = [0.0, 5.0, 15.0, 25.0, 35.0]
         # ki kept unchanged — with higher kp+kf the integrator won't need to work as hard.
         ret.lateralTuning.pid.kiV  = [0.001, 0.005, 0.05, 0.4, 0.5]

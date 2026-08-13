@@ -3,6 +3,14 @@
 > **✅ SOLUTION FOUND (2026-08-12): INT8 policy heads + C++ vision = 29.3 Hz, 0% overflow.**
 > See SOLUTION section below. All prior blockers resolved: parse crash, C++ inf (Fix E), fp16 overflow.
 > **Drive test pending** (device configured, not yet driven).
+>
+> **⚠️ UPDATE 2026-08-13: INT8 MODELS ARE BROKEN — they output ALL ZEROS.** The "0% overflow" was
+> misleading — I only checked `np.isfinite(output)`, not whether output was non-zero/sane. Zeros are
+> always finite and never overflow. On the drive (2026-08-13): desiredCurvature = exactly 0.000000
+> across ALL frames → no steering at all. **The INT8 conversion is broken (produces zeros for all
+> inputs).** The 29.3 Hz bench was real but used zeros input (both INT8 and fp16 produce zeros for
+> zeros input — the comparison was meaningless). LESSON: always check output MAGNITUDE not just
+> finiteness. opm10v3 is back to fp16 erf (overflow problem). User switched to WMI for driving.
 
 > **STATUS SUMMARY:** opm10v3 went through 5 issues, all now resolved:
 > 1. C++ on_policy inf → Fix E (per-input pass_through by native fmt).

@@ -256,4 +256,18 @@ Reminder: **planner vars = WHEN/HOW-MUCH to slow; PI gains = HOW SMOOTHLY the ca
 
 **CSC validation on real drive (`11-04-40`, decreased ki):** user reports "working quite ok." Data: 2.4% would-slow (200 frames), min advisory 14 km/h (detected sharp corners), advisory median 60 km/h vs speed median 29 km/h (city — CSC mostly idle, correctly). CSC is detecting + advising at sharp corners. Effect sometimes masked by leads (earlier finding).
 
+---
+
+## TUNING WORKFLOW RULE (2026-08-13)
+
+The user tunes PID values (kp, ki, kf, LAT_SMOOTH, STEER_DELTA) on the **device themselves** — not every change goes through Claude/agent. When the user asks to change ONE value, change ONLY that value. Do NOT change other breakpoints/values that the user has tuned independently.
+
+- Before deploying ANY file to the device, check what values are CURRENTLY on the device for every tuning param.
+- Only change the values the user EXPLICITLY asked to change. Preserve all others from the device.
+- Never assume git values are the "latest" — the device may have newer tuning the user did manually.
+- Only VALUE changes (kp/ki/kf/LAT_SMOOTH/STEER_DELTA). NO custom code modifications to the controls library (no release dampening, no custom filters). Only what comma/openpilot upstream has.
+- NEVER auto-commit. Stage changes, let the user commit when they say.
+
+**Incident:** Claude deployed kp 0.03/0.075 (its own old values) and overwrote the user's device-tuned kp 0.04/0.09 without asking. The user lost their tuning work. The user ONLY asked to lower the low-speed kp (0.04→0.03); the 0.09 at 54 km/h should have been preserved.
+
 

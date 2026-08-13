@@ -219,10 +219,10 @@ class SelfdriveD:
           self.events.add(EventName.pcmEnable)
 
       # MADS: compute lat_only EARLY so the gas gate below uses the current frame.
-      # When MAIN armed (available) but stock ACC off → standby lateral. Must be
-      # computed before the pedalPressed block so gas is gated correctly this frame.
+      # lat_only = True when MAIN armed (nonAdaptive=False via is_icc_on) but stock ACC off.
+      # When MADS off: nonAdaptive is always False (original), so this never changes behavior.
       if self.mads_enabled:
-        self.lat_only = (CS.cruiseState.available and not CS.cruiseState.enabled
+        self.lat_only = (not CS.cruiseState.nonAdaptive and not CS.cruiseState.enabled
                          and CS.gearShifter == car.CarState.GearShifter.drive)
       else:
         self.lat_only = False
@@ -481,7 +481,7 @@ class SelfdriveD:
 
     # MADS DEBUG LOGGING (temporary)
     if self.mads_enabled and self.sm.frame % 50 == 0:
-      cloudlog.warning(f"MADS_DEBUG frame={self.sm.frame}: mads={self.mads_enabled} lat_only={self.lat_only} enabled={self.enabled} cruise_avail={CS.cruiseState.available} cruise_enabled={CS.cruiseState.enabled} gear={CS.gearShifter} events_count={len(self.events.events)}")
+      cloudlog.warning(f"MADS_DEBUG frame={self.sm.frame}: mads={self.mads_enabled} lat_only={self.lat_only} enabled={self.enabled} cruise_avail={CS.cruiseState.available} cruise_enabled={CS.cruiseState.enabled} gear={CS.gearShifter} events_count={len(self.events.events)} lkaDisabled={CS.lkaDisabled}")
 
   def data_sample(self):
     _car_state = messaging.recv_one(self.car_state_sock)

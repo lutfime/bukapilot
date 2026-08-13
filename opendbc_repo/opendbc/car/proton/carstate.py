@@ -191,13 +191,7 @@ class CarState(CarStateBase):
     ret.stockFcw = bool(cp_cam.vl["FCW"]["STOCK_FCW_TRIGGERED"])
 
     #TODO: If using car signal, S70 cannot engage, X50 gas press would make it False.
-    # MADS: when enabled, available = MAIN button (ACC_ON_OFF_BUTTON) OR gas override.
-    # This matches KA1's pattern: cruise_available = bool(gas_override or ACC_ON_OFF_BUTTON).
-    # When MADS off: hardcoded True (original behavior, avoids S70/X50 engage issues).
-    if self.mads_enabled:
-      ret.cruiseState.available = bool(self.gas_override or self.acc_on_off)
-    else:
-      ret.cruiseState.available = True
+    ret.cruiseState.available = True
 
     self.res_btn_pressed = bool(cp.vl["ACC_BUTTONS"]["RES_BUTTON"])
     prev_distance_val = self.distance_val
@@ -212,7 +206,7 @@ class CarState(CarStateBase):
     ret.cruiseState.speed = ret.cruiseState.speedCluster / HUD_MULTIPLIER
     self.cruise_standstill = bool(cp_cam.vl["ACC_CMD"]["STANDSTILL_REQ"]) and not ret.gasPressed
     ret.cruiseState.standstill = False
-    ret.cruiseState.nonAdaptive = False
+    ret.cruiseState.nonAdaptive = not self.is_icc_on if self.mads_enabled else False
     ret.cruiseState.enabled = (
       cp_cam.vl["ACC_CMD"]["ACC_REQ"] + cp_cam.vl["ACC_CMD"]["STANDSTILL_REQ"] + cp_cam.vl["ACC_CMD"]["ACCEL_ALLOWED"]
     ) > 1

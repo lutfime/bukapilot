@@ -112,7 +112,7 @@ def _use_rknn_3split() -> bool:
     VISION_3SPLIT_METADATA_PATH, ON_POLICY_METADATA_PATH, OFF_POLICY_METADATA_PATH,
   ])
 
-LAT_SMOOTH_SECONDS = 0.4  # smooth the RKNN model's noisy desired_curvature. 0.2 had too much wobble at corners (desired path swings 22° in 0.7s); user bumped to 0.4 (2026-08-13) — wobble improved, corners still responsive. Tradeoff: higher = smoother but more entry lag.
+LAT_SMOOTH_SECONDS = 0.5  # smooth the RKNN model's noisy desired_curvature. User bumped 0.4->0.5 (2026-08-13) for less corner wobble.
 LONG_SMOOTH_SECONDS = 0.3
 MIN_LAT_CONTROL_SPEED = 0.3
 # When the 0.11 supercombo model (with action head) is active, use upstream 0.11's value (0.0).

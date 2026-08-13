@@ -134,6 +134,7 @@ class SelfdriveD:
     except (FileNotFoundError, OSError):
       pass
     self.lat_only = False           # True when in standby-lateral (cruise available, stock ACC off)
+    self.lat_only_unavailable_count = 0  # consecutive frames available=False (for MAIN-off timeout)
     self.distance_traveled = 0
     self.last_functional_fan_frame = 0
     self.events_prev = []
@@ -218,22 +219,34 @@ class SelfdriveD:
           # body always wants to enable
           self.events.add(EventName.pcmEnable)
 
-      # MADS (KA1-style lat_only state machine):
-      # SET:   available=True (MAIN armed) OR already enabled → lat_only=True
-      # HOLD:  once True, stays True regardless of available noise (1-3s drops from camera ECU).
-      # CLEAR: cruise_enabled=True (SET pressed → full ACC) OR gear != drive
-      # Note: NOT cleared on `not self.enabled` — that would deadlock (pcmEnable needs lat_only,
-      # lat_only needs to survive the disabled state to inject pcmEnable). Brake disengages via
-      # pedalPressed → USER_DISABLE → state machine handles it. Safety events (steerFault etc.)
-      # have ET.NO_ENTRY which blocks re-engagement even if pcmEnable is injected.
+      # MADS lat_only state machine:
+      # SET:   available=True (MAIN armed) → lat_only=True (instant)
+      # HOLD:  once True, stays True during available noise drops (1-3s from camera ECU)
+      # CLEAR: gear != drive (instant)
+      #        OR brake + MAIN off: not enabled AND not available (instant)
+      #        OR available=False for >4s while enabled (MAIN-off timeout; noise max is 3s)
+      # Note: cruise_enabled does NOT clear lat_only — it stays True during full ACC so
+      # cancel→standby transition works even during noise drops. The MADS block at end of
+      # update_events skips pcmEnable when already enabled, and stripping pcmDisable is a
+      # no-op during full ACC (car_specific fires pcmEnable not pcmDisable).
       if self.mads_enabled:
-        if CS.cruiseState.enabled or CS.gearShifter != car.CarState.GearShifter.drive:
+        if CS.gearShifter != car.CarState.GearShifter.drive:
           self.lat_only = False
-        elif CS.cruiseState.available or self.enabled:
+          self.lat_only_unavailable_count = 0
+        elif not self.enabled and not CS.cruiseState.available:
+          self.lat_only = False
+          self.lat_only_unavailable_count = 0
+        elif CS.cruiseState.available:
           self.lat_only = True
-        # else: HOLD — don't change lat_only (tolerate available noise drops)
+          self.lat_only_unavailable_count = 0
+        elif self.lat_only and self.enabled:
+          self.lat_only_unavailable_count += 1
+          if self.lat_only_unavailable_count > 400:  # 4s at 100Hz
+            self.lat_only = False
+        # else: HOLD — lat_only stays True (enabled, available dropped briefly)
       else:
         self.lat_only = False
+        self.lat_only_unavailable_count = 0
 
       # Disable on rising edge of accelerator or brake. Also disable on brake when speed > 0
       # MADS: in standby-lateral, gas is manual and must NOT disengage. Brake always disengages.

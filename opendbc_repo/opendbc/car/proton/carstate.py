@@ -88,9 +88,10 @@ class CarState(CarStateBase):
     self.lks_aux = bool(cp_cam.vl["ADAS_LKAS"]["STOCK_LKS_AUX"])
     self.lka_enable = bool(cp_cam.vl["ADAS_LKAS"]["LKA_ENABLE"])
     self.is_icc_on = bool(cp_cam.vl["PCM_BUTTONS"]["ICC_ON"])
-    # MAIN button + gas override — used for MADS cruise_available (KA1 pattern)
-    self.acc_on_off = bool(cp_cam.vl["PCM_BUTTONS"]["ACC_ON_OFF_BUTTON"])
-    self.gas_override = bool(cp_cam.vl["PCM_BUTTONS"]["GAS_OVERRIDE"])
+    # MAIN button + gas override from POWERTRAIN bus (cp), not camera bus (cp_cam).
+    # KA1 reads these from cp (bus 0) — the camera bus doesn't carry ACC_ON_OFF_BUTTON reliably.
+    self.acc_on_off = bool(cp.vl["PCM_BUTTONS"]["ACC_ON_OFF_BUTTON"])
+    self.gas_override = bool(cp.vl["PCM_BUTTONS"]["GAS_OVERRIDE"])
     self.has_audio_ldw = bool(cp_cam.vl["LKAS"]["LANE_DEPARTURE_AUDIO_RIGHT"]) or bool(
       cp_cam.vl["LKAS"]["LANE_DEPARTURE_AUDIO_LEFT"]
     )
@@ -206,7 +207,7 @@ class CarState(CarStateBase):
     ret.cruiseState.speed = ret.cruiseState.speedCluster / HUD_MULTIPLIER
     self.cruise_standstill = bool(cp_cam.vl["ACC_CMD"]["STANDSTILL_REQ"]) and not ret.gasPressed
     ret.cruiseState.standstill = False
-    ret.cruiseState.nonAdaptive = not self.is_icc_on if self.mads_enabled else False
+    ret.cruiseState.nonAdaptive = not (self.acc_on_off or self.gas_override) if self.mads_enabled else False
     ret.cruiseState.enabled = (
       cp_cam.vl["ACC_CMD"]["ACC_REQ"] + cp_cam.vl["ACC_CMD"]["STANDSTILL_REQ"] + cp_cam.vl["ACC_CMD"]["ACCEL_ALLOWED"]
     ) > 1
@@ -248,6 +249,7 @@ class CarState(CarStateBase):
       ("SEATBELTS", math.nan),
       ("DOOR_LEFT_SIDE", math.nan),
       ("DOOR_RIGHT_SIDE", math.nan),
+      ("PCM_BUTTONS", math.nan),  # MADS: ACC_ON_OFF_BUTTON (MAIN) on powertrain bus, like KA1
     ]
 
     return CANParser(DBC[CP.carFingerprint]["pt"], signals, CANBUS.main_bus)

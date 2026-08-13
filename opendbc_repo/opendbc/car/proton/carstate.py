@@ -88,10 +88,14 @@ class CarState(CarStateBase):
     self.lks_aux = bool(cp_cam.vl["ADAS_LKAS"]["STOCK_LKS_AUX"])
     self.lka_enable = bool(cp_cam.vl["ADAS_LKAS"]["LKA_ENABLE"])
     self.is_icc_on = bool(cp_cam.vl["PCM_BUTTONS"]["ICC_ON"])
-    # MAIN button + gas override from POWERTRAIN bus (cp), not camera bus (cp_cam).
-    # KA1 reads these from cp (bus 0) — the camera bus doesn't carry ACC_ON_OFF_BUTTON reliably.
+    # MAIN button signals from BOTH buses for diagnostics.
+    # KA1 reads ACC_ON_OFF_BUTTON from powertrain (cp/bus 0).
+    # proton_mads reads CRUISE_AVAILABLE from camera (cp_cam/bus 2).
+    # We read both to determine which works on the X70.
     self.acc_on_off = bool(cp.vl["PCM_BUTTONS"]["ACC_ON_OFF_BUTTON"])
+    self.acc_on_off_cam = bool(cp_cam.vl["PCM_BUTTONS"]["ACC_ON_OFF_BUTTON"])
     self.gas_override = bool(cp.vl["PCM_BUTTONS"]["GAS_OVERRIDE"])
+    self.cruise_avail_cam = bool(cp_cam.vl["PCM_BUTTONS"]["CRUISE_AVAILABLE"])
     self.has_audio_ldw = bool(cp_cam.vl["LKAS"]["LANE_DEPARTURE_AUDIO_RIGHT"]) or bool(
       cp_cam.vl["LKAS"]["LANE_DEPARTURE_AUDIO_LEFT"]
     )
@@ -208,6 +212,15 @@ class CarState(CarStateBase):
     self.cruise_standstill = bool(cp_cam.vl["ACC_CMD"]["STANDSTILL_REQ"]) and not ret.gasPressed
     ret.cruiseState.standstill = False
     ret.cruiseState.nonAdaptive = not (self.acc_on_off or self.gas_override) if self.mads_enabled else False
+
+    # MADS DIAGNOSTIC: log all MAIN-related signals every ~2 sec to find which one works on X70
+    if self.mads_enabled:
+      if not hasattr(self, '_dbg_cnt'):
+        self._dbg_cnt = 0
+      self._dbg_cnt += 1
+      if self._dbg_cnt % 100 == 0:
+        from openpilot.common.swaglog import cloudlog
+        cloudlog.warning(f"MADS_SIG: acc_on_off_pt={self.acc_on_off} acc_on_off_cam={self.acc_on_off_cam} cruise_avail_cam={self.cruise_avail_cam} gas_override={self.gas_override} is_icc_on={self.is_icc_on} nonAdaptive={ret.cruiseState.nonAdaptive} cruise_enabled={ret.cruiseState.enabled} gear={ret.gearShifter}")
     ret.cruiseState.enabled = (
       cp_cam.vl["ACC_CMD"]["ACC_REQ"] + cp_cam.vl["ACC_CMD"]["STANDSTILL_REQ"] + cp_cam.vl["ACC_CMD"]["ACCEL_ALLOWED"]
     ) > 1

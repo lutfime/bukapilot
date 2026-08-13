@@ -218,14 +218,20 @@ class SelfdriveD:
           # body always wants to enable
           self.events.add(EventName.pcmEnable)
 
-      # MADS: compute lat_only EARLY so the gas gate below uses the current frame.
-      # lat_only = True only when MAIN is armed (cruiseState.available, driven by
-      # CRUISE_AVAILABLE from cam bus 2) but stock ACC is off (cruiseState.enabled=False).
-      # acc_on_off_pt is a latched status on the X70 (always True), so we gate on `available`
-      # instead of the old `nonAdaptive` logic — see MADS-DEBUG-HANDOFF.
+      # MADS (KA1-style lat_only state machine):
+      # SET:   available=True (MAIN armed) OR already enabled → lat_only=True
+      # HOLD:  once True, stays True regardless of available noise (1-3s drops from camera ECU).
+      # CLEAR: cruise_enabled=True (SET pressed → full ACC) OR gear != drive
+      # Note: NOT cleared on `not self.enabled` — that would deadlock (pcmEnable needs lat_only,
+      # lat_only needs to survive the disabled state to inject pcmEnable). Brake disengages via
+      # pedalPressed → USER_DISABLE → state machine handles it. Safety events (steerFault etc.)
+      # have ET.NO_ENTRY which blocks re-engagement even if pcmEnable is injected.
       if self.mads_enabled:
-        self.lat_only = (CS.cruiseState.available and not CS.cruiseState.enabled
-                         and CS.gearShifter == car.CarState.GearShifter.drive)
+        if CS.cruiseState.enabled or CS.gearShifter != car.CarState.GearShifter.drive:
+          self.lat_only = False
+        elif CS.cruiseState.available or self.enabled:
+          self.lat_only = True
+        # else: HOLD — don't change lat_only (tolerate available noise drops)
       else:
         self.lat_only = False
 
@@ -474,16 +480,20 @@ class SelfdriveD:
     if self.lat_only:
       if not self.enabled:
         self.events.add(EventName.pcmEnable)
+      # Strip events that fire because stock ACC is off or available signal dropped (noise).
+      # wrongCarMode fires when cruiseState.available=False (noise drop) — must strip or it
+      # disengages via USER_DISABLE, defeating the lat_only HOLD logic.
+      # NOTE: pedalPressed is NOT stripped — brake must ALWAYS disengage.
       for ev in (EventName.pcmDisable, EventName.buttonCancel,
-                 EventName.cruiseDisabled):
+                 EventName.cruiseDisabled, EventName.wrongCarMode):
         try:
           self.events.events.remove(ev)
         except ValueError:
           pass
 
-    # MADS DEBUG LOGGING (temporary)
-    if self.mads_enabled and self.sm.frame % 50 == 0:
-      cloudlog.warning(f"MADS_DEBUG frame={self.sm.frame}: mads={self.mads_enabled} lat_only={self.lat_only} enabled={self.enabled} cruise_avail={CS.cruiseState.available} cruise_enabled={CS.cruiseState.enabled} gear={CS.gearShifter} events_count={len(self.events.events)} lkaDisabled={CS.lkaDisabled}")
+    # MADS DEBUG LOGGING (temporary — remove after verified working)
+    if self.mads_enabled and self.sm.frame % 100 == 0:
+      cloudlog.warning(f"MADS_DEBUG: lat_only={self.lat_only} enabled={self.enabled} avail={CS.cruiseState.available} cruise_en={CS.cruiseState.enabled} gear={CS.gearShifter}")
 
   def data_sample(self):
     _car_state = messaging.recv_one(self.car_state_sock)

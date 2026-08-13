@@ -113,7 +113,76 @@ Gas is just the trigger. The root cause is the noisy `cruise_avail_cam` signal d
 ```
 The False periods are 1-3 seconds — too long for a simple debounce, too short to be a real MAIN release.
 
-### Attempted fix (REVERTED — user rejected)
+---
+
+## CRITICAL FINDING (2026-08-13): DBC bit swap + possible NaN contamination
+
+### DBC bit positions are SWAPPED between KA1 and KA2
+
+The PCM_BUTTONS message (addr 419) defines ACC_ON_OFF_BUTTON and CRUISE_AVAILABLE
+at **different bit positions** in KA1 vs KA2 DBC files:
+
+| Bit | KA1 DBC (`ka1s_snapshot`) | KA2 DBC (current `x70-map`) |
+|---|---|---|
+| **16** | `ACC_SET` | `ACC_ON_OFF_BUTTON` |
+| **17** | `ACC_ON_OFF_BUTTON` | `CRUISE_AVAILABLE` |
+
+**They are reading the SAME physical bits but with DIFFERENT names.**
+
+- KA1 read bit 17 (labeled `ACC_ON_OFF_BUTTON` in KA1's DBC) → clean MAIN button signal → worked
+- KA2 reads bit 16 (labeled `ACC_ON_OFF_BUTTON` in KA2's DBC) → this is actually what KA1 called `ACC_SET` → "always True" (wrong signal entirely)
+- KA2 calls bit 17 `CRUISE_AVAILABLE` → this is the SAME physical bit KA1 called `ACC_ON_OFF_BUTTON`
+
+**The signal we've been calling "CRUISE_AVAILABLE" (bit 17, noisy on cam bus) IS the signal KA1 successfully used as ACC_ON_OFF_BUTTON (the MAIN button).** Same bit, same physical CAN signal — just renamed in the DBC.
+
+### proton_mads never read ACC_ON_OFF_BUTTON
+
+The proton_mads branch does NOT reference `ACC_ON_OFF_BUTTON` anywhere in its carstate.py.
+It uses `CRUISE_AVAILABLE` (bit 17) from camera bus — which is the same bit KA1 called
+ACC_ON_OFF_BUTTON. proton_mads was on the right track but was abandoned for firmware reasons.
+
+### Possible NaN contamination in bus 0 readings
+
+The signal investigation above shows "always True" for bus 0 readings of both
+ACC_ON_OFF_BUTTON and CRUISE_AVAILABLE. But this may be a **NaN bug**:
+
+1. `("PCM_BUTTONS", math.nan)` was added to the powertrain parser for diagnostics
+2. `math.nan` is the default when the message hasn't been received on that bus
+3. In Python: `bool(float('nan'))` = **True**
+4. If PCM_BUTTONS doesn't actually arrive on bus 0, ALL signals return NaN → `bool(NaN)` = True
+
+**The "always True on bus 0" results may be NaN being misinterpreted as True, not the actual
+CAN signal value.** The signal investigation did NOT check for NaN — all readings were wrapped
+in `bool()` which converts NaN to True.
+
+### What needs to be verified
+
+1. **Does PCM_BUTTONS actually arrive on bus 0?** Test with NaN check:
+   ```python
+   val = cp.vl["PCM_BUTTONS"]["ACC_ON_OFF_BUTTON"]
+   if val != val:  # NaN check (NaN != NaN is True in Python)
+       print("NOT RECEIVED on bus 0")
+   else:
+       print(f"REAL VALUE = {val}")
+   ```
+
+2. **If PCM_BUTTONS arrives on bus 0, what are the actual bit 16 and bit 17 values?**
+   Read raw values (not bool-converted) to distinguish 0, 1, and NaN.
+
+3. **Is bit 17 (KA1's ACC_ON_OFF_BUTTON = KA2's CRUISE_AVAILABLE) clean on bus 0?**
+   If PCM_BUTTONS exists on bus 0 and bit 17 tracks MAIN cleanly (no noise), we can use it
+   directly — matching KA1's working approach. The noise may only affect the camera bus (bus 2),
+   not the powertrain bus (bus 0).
+
+4. **Why was the DBC changed between KA1 and KA2?** The bit swap may have been accidental
+   during an opendbc update. If KA1's DBC was correct (bit 17 = ACC_ON_OFF_BUTTON),
+   the KA2 DBC may have a bug.
+
+### Impact on previous signal investigation
+
+The signal investigation table (above) may be WRONG for bus 0 entries. All "always True"
+readings on bus 0 could be NaN artifacts. The investigation needs to be re-run with NaN
+checking to get accurate results.
 A 30-frame (0.3s) falling-edge debounce was attempted but:
 1. Insufficient: the drops are 1-3s, debounce only covers 0.3s
 2. Dangerous: a longer debounce would mask real MAIN release (steering after driver turned off cruise)

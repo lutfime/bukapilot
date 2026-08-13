@@ -4,6 +4,15 @@
 > See SOLUTION section below. All prior blockers resolved: parse crash, C++ inf (Fix E), fp16 overflow.
 > **Drive test pending** (device configured, not yet driven).
 
+> **⚠️ UPDATE 2026-08-13: INT8 MODELS ARE BROKEN — they output ALL ZEROS.**
+> The "0% overflow" was misleading — only checked `np.isfinite(output)`, not whether output was
+> non-zero/sane. Zeros are always finite and never overflow. On the drive (2026-08-13):
+> `desiredCurvature = exactly 0.000000` across ALL frames → **no steering at all**.
+> The INT8 conversion is broken (produces zeros for all inputs). Likely cause: bad calibration
+> data (synthetic random features, not real driving data). INT8 quantization needs real activation
+> ranges to compute correct scales — synthetic data produced wrong scales → everything maps to zero.
+> **INT8 is NOT a working solution.** OPM10V3 remains undrivable.
+
 > **STATUS SUMMARY:** opm10v3 went through 5 issues, all now resolved:
 > 1. C++ on_policy inf → Fix E (per-input pass_through by native fmt).
 > 2. Parse crash (lane_lines) → ignore_missing + parse off_policy perception.

@@ -218,14 +218,21 @@ class SelfdriveD:
           # body always wants to enable
           self.events.add(EventName.pcmEnable)
 
-      # MADS: compute lat_only EARLY so the gas gate below uses the current frame.
-      # lat_only = True only when MAIN is armed (cruiseState.available, driven by
-      # CRUISE_AVAILABLE from cam bus 2) but stock ACC is off (cruiseState.enabled=False).
-      # acc_on_off_pt is a latched status on the X70 (always True), so we gate on `available`
-      # instead of the old `nonAdaptive` logic — see MADS-DEBUG-HANDOFF.
+      # MADS (KA1-style lat_only state machine):
+      # SET:   available=True (MAIN armed) + not cruise_enabled + drive → lat_only=True
+      # HOLD:  once True, stays True regardless of available noise (1-3s drops from camera ECU).
+      #        This matches KA1 — its clear condition `if not cruise_available` was dead code
+      #        because the signal was always True. We achieve the same by not clearing on available.
+      # CLEAR: cruise_enabled=True (SET pressed → full ACC)
+      #        OR gear != drive
+      #        OR not self.enabled (brake → pedalPressed → USER_DISABLE → enabled=False)
+      # Gas gate below uses lat_only, so it must be computed before the pedalPressed block.
       if self.mads_enabled:
-        self.lat_only = (CS.cruiseState.available and not CS.cruiseState.enabled
-                         and CS.gearShifter == car.CarState.GearShifter.drive)
+        if CS.cruiseState.enabled or CS.gearShifter != car.CarState.GearShifter.drive or not self.enabled:
+          self.lat_only = False
+        elif CS.cruiseState.available:
+          self.lat_only = True
+        # else: HOLD — don't change lat_only (tolerate available noise drops)
       else:
         self.lat_only = False
 
@@ -481,9 +488,9 @@ class SelfdriveD:
         except ValueError:
           pass
 
-    # MADS DEBUG LOGGING (temporary)
-    if self.mads_enabled and self.sm.frame % 50 == 0:
-      cloudlog.warning(f"MADS_DEBUG frame={self.sm.frame}: mads={self.mads_enabled} lat_only={self.lat_only} enabled={self.enabled} cruise_avail={CS.cruiseState.available} cruise_enabled={CS.cruiseState.enabled} gear={CS.gearShifter} events_count={len(self.events.events)} lkaDisabled={CS.lkaDisabled}")
+    # MADS DEBUG LOGGING (temporary — remove after verified working)
+    if self.mads_enabled and self.sm.frame % 100 == 0:
+      cloudlog.warning(f"MADS_DEBUG: lat_only={self.lat_only} enabled={self.enabled} avail={CS.cruiseState.available} cruise_en={CS.cruiseState.enabled} gear={CS.gearShifter}")
 
   def data_sample(self):
     _car_state = messaging.recv_one(self.car_state_sock)

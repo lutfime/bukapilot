@@ -79,20 +79,19 @@ class CarInterface(CarInterfaceBase):
         # Low kpV[0]=0.0005 = the smooth, no-wobble/no-reengage-slam feel KA1 had (vs torque's huge low-speed kp).
         ret.lateralTuning.init("pid")
         ret.lateralTuning.pid.kpBP = [0.0, 5.0, 15.0, 25.0, 35.0]
-        # X70 low-speed lateral kp. 2026-08-12: tried cutting these (0.02->0.015 @18kmh, 0.05->0.035 @54kmh)
-        #   based on ONE corner's oscillation in a short WMI drive. REVERTED same day: a longer WMI drive
-        #   (route 2026-08-12--04-58-50, 100% low-speed) showed the cut caused PERVASIVE low-speed UNDER-STEER
-        #   in every corner — actual steering only 0.78x desired (median 17.3deg actual vs 20.4deg wanted),
-        #   846 driver steer-overrides. Blanket-cutting the whole low-speed band was the wrong lever; the
-        #   single corner wobble was likely model noise, not a kp problem. Lesson: don't tune from a 1-corner
-        #   short drive. If a specific corner oscillates again, tune it surgically — not the whole low-speed range.
-        # History: 54km/h was 0.06->0.045 (a11fb76), restored to 0.05 (2026-08-09). 90/126 km/h = 0.10/0.17.
-        ret.lateralTuning.pid.kpV  = [0.0005, 0.02, 0.05, 0.10, 0.17]
+        # X70 PID retune for STEER_DELTA 10/10 (2026-08-13). Drive data showed output only 0.27 at corners
+        # (27% of max) = "soft". Causes: low kp + near-zero kf + reliance on slow integrator.
+        # kp: 1.5x the pre-retune values (compensates for STEER_DELTA_UP 10 vs old 15 = 33% slower ramp).
+        #     Data-driven: target output 0.4 / current 0.27 = 1.49x. Confirms the 15/10 STEER_DELTA ratio.
+        # Old kpV was [0.0005, 0.02, 0.05, 0.10, 0.17]. >>> REVERT TO THAT if overshoot/wobble returns. <<<
+        ret.lateralTuning.pid.kpV  = [0.0005, 0.03, 0.075, 0.15, 0.25]
         ret.lateralTuning.pid.kiBP = [0.0, 5.0, 15.0, 25.0, 35.0]
-        # ki restored to pre-cut values; the 2026-08-12 trim (0.005->0.004 / 0.05->0.04) was part of the
-        # same over-correction and is reverted with kp. Shared by ALL models (default+WMI+opm10v3).
+        # ki kept unchanged — with higher kp+kf the integrator won't need to work as hard.
         ret.lateralTuning.pid.kiV  = [0.001, 0.005, 0.05, 0.4, 0.5]
-        ret.lateralTuning.pid.kf = 0.0000250
+        # kf boosted 4x (0.0000250 -> 0.0001): feedforward was only 9% of output (negligible). Should be the
+        # biggest contributor at corners (anticipatory torque = steer INTO the curve, don't wait for error).
+        # At a 16deg corner @31km/h: f = kf*16*76 = 0.12 (was 0.024). >>> REVERT TO 0.0000250 if too aggressive. <<<
+        ret.lateralTuning.pid.kf = 0.0001
       else:
         # Torque (self-tuning via locationd/torqued) — OPT-IN (toggle off). Seed = torqued-converged; torqued refines online. Stock KP_INTERP rails at low speed on this car -> wobble (see result/lateral_analysis.py).
         ret.lateralTuning.init("torque")

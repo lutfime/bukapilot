@@ -92,7 +92,7 @@ class CarInterface(CarInterfaceBase):
         # kf boosted 4x (0.0000250 -> 0.0001): feedforward was only 9% of output (negligible). Should be the
         # biggest contributor at corners (anticipatory torque = steer INTO the curve, don't wait for error).
         # At a 16deg corner @31km/h: f = kf*16*76 = 0.12 (was 0.024). >>> REVERT TO 0.0000250 if too aggressive. <<<
-        ret.lateralTuning.pid.kf = 0.0001
+        ret.lateralTuning.pid.kf = 0.00015
       else:
         # Torque (self-tuning via locationd/torqued) — OPT-IN (toggle off). Seed = torqued-converged; torqued refines online. Stock KP_INTERP rails at low speed on this car -> wobble (see result/lateral_analysis.py).
         ret.lateralTuning.init("torque")

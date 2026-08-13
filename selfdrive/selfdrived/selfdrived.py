@@ -219,18 +219,17 @@ class SelfdriveD:
           self.events.add(EventName.pcmEnable)
 
       # MADS (KA1-style lat_only state machine):
-      # SET:   available=True (MAIN armed) + not cruise_enabled + drive → lat_only=True
+      # SET:   available=True (MAIN armed) OR already enabled → lat_only=True
       # HOLD:  once True, stays True regardless of available noise (1-3s drops from camera ECU).
-      #        This matches KA1 — its clear condition `if not cruise_available` was dead code
-      #        because the signal was always True. We achieve the same by not clearing on available.
-      # CLEAR: cruise_enabled=True (SET pressed → full ACC)
-      #        OR gear != drive
-      #        OR not self.enabled (brake → pedalPressed → USER_DISABLE → enabled=False)
-      # Gas gate below uses lat_only, so it must be computed before the pedalPressed block.
+      # CLEAR: cruise_enabled=True (SET pressed → full ACC) OR gear != drive
+      # Note: NOT cleared on `not self.enabled` — that would deadlock (pcmEnable needs lat_only,
+      # lat_only needs to survive the disabled state to inject pcmEnable). Brake disengages via
+      # pedalPressed → USER_DISABLE → state machine handles it. Safety events (steerFault etc.)
+      # have ET.NO_ENTRY which blocks re-engagement even if pcmEnable is injected.
       if self.mads_enabled:
-        if CS.cruiseState.enabled or CS.gearShifter != car.CarState.GearShifter.drive or not self.enabled:
+        if CS.cruiseState.enabled or CS.gearShifter != car.CarState.GearShifter.drive:
           self.lat_only = False
-        elif CS.cruiseState.available:
+        elif CS.cruiseState.available or self.enabled:
           self.lat_only = True
         # else: HOLD — don't change lat_only (tolerate available noise drops)
       else:
@@ -481,8 +480,12 @@ class SelfdriveD:
     if self.lat_only:
       if not self.enabled:
         self.events.add(EventName.pcmEnable)
+      # Strip events that fire because stock ACC is off or available signal dropped (noise).
+      # wrongCarMode fires when cruiseState.available=False (noise drop) — must strip or it
+      # disengages via USER_DISABLE, defeating the lat_only HOLD logic.
+      # NOTE: pedalPressed is NOT stripped — brake must ALWAYS disengage.
       for ev in (EventName.pcmDisable, EventName.buttonCancel,
-                 EventName.cruiseDisabled):
+                 EventName.cruiseDisabled, EventName.wrongCarMode):
         try:
           self.events.events.remove(ev)
         except ValueError:

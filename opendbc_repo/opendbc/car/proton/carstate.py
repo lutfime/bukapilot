@@ -74,7 +74,7 @@ class CarState(CarStateBase):
     self.cur_blinker = Dir.RIGHT if right_blinker else Dir.LEFT
     self.blinker_on_alc_speed = not alc_below_min_speed # Check when blinker on / direction change, if ALC speed was enough
 
-  def _update_lks_state(self, cp_cam):
+  def _update_lks_state(self, cp, cp_cam):
     """
     Lane Keep Assist (LKA)
     Warning Only:         LKS Assist True,  Auxiliary False
@@ -88,14 +88,21 @@ class CarState(CarStateBase):
     self.lks_aux = bool(cp_cam.vl["ADAS_LKAS"]["STOCK_LKS_AUX"])
     self.lka_enable = bool(cp_cam.vl["ADAS_LKAS"]["LKA_ENABLE"])
     self.is_icc_on = bool(cp_cam.vl["PCM_BUTTONS"]["ICC_ON"])
-    # MAIN button signals from BOTH buses for diagnostics.
-    # KA1 reads ACC_ON_OFF_BUTTON from powertrain (cp/bus 0).
-    # proton_mads reads CRUISE_AVAILABLE from camera (cp_cam/bus 2).
-    # We read both to determine which works on the X70.
+    # MAIN/standby signal candidates — log ALL to find which is stable on the X70.
+    # acc_on_off_pt is a latched status (always True), CRUISE_AVAILABLE is unstable.
+    # CRUISE_CONTROL_EN (bus 0, GAS_PEDAL) and DRIVING_MODES (2-bit) are the best
+    # candidates for the HUD "standby" indicator. See MADS-DEBUG-HANDOFF.
     self.acc_on_off = bool(cp.vl["PCM_BUTTONS"]["ACC_ON_OFF_BUTTON"])
     self.acc_on_off_cam = bool(cp_cam.vl["PCM_BUTTONS"]["ACC_ON_OFF_BUTTON"])
     self.gas_override = bool(cp.vl["PCM_BUTTONS"]["GAS_OVERRIDE"])
     self.cruise_avail_cam = bool(cp_cam.vl["PCM_BUTTONS"]["CRUISE_AVAILABLE"])
+    self.cruise_avail_pt = bool(cp.vl["PCM_BUTTONS"]["CRUISE_AVAILABLE"])
+    self.cruise_ctrl_en = bool(cp.vl["GAS_PEDAL"]["CRUISE_CONTROL_EN"])
+    self.driving_modes_pt = int(cp.vl["PCM_BUTTONS"]["DRIVING_MODES"])
+    self.driving_modes_cam = int(cp_cam.vl["PCM_BUTTONS"]["DRIVING_MODES"])
+    self.cruise_btn = bool(cp.vl["ACC_BUTTONS"]["CRUISE_BTN"])
+    self.cruise_disabled_cam = bool(cp_cam.vl["ACC_CMD"]["CRUISE_DISABLED"])
+    self.motion_control_cam = int(cp_cam.vl["ACC_CMD"]["MOTION_CONTROL"])
     self.has_audio_ldw = bool(cp_cam.vl["LKAS"]["LANE_DEPARTURE_AUDIO_RIGHT"]) or bool(
       cp_cam.vl["LKAS"]["LANE_DEPARTURE_AUDIO_LEFT"]
     )
@@ -143,7 +150,7 @@ class CarState(CarStateBase):
     ret.buttonEvents = []
     ret.personality = -1
 
-    self._update_lks_state(cp_cam)
+    self._update_lks_state(cp, cp_cam)
     ret.stockAccelCmd = float(self.stock_acc_cmd)
 
     # If cruise mode is ICC, make bukapilot control steering so it won't disengage by itself.
@@ -196,7 +203,10 @@ class CarState(CarStateBase):
     ret.stockFcw = bool(cp_cam.vl["FCW"]["STOCK_FCW_TRIGGERED"])
 
     #TODO: If using car signal, S70 cannot engage, X50 gas press would make it False.
-    ret.cruiseState.available = True
+    # MADS: when enabled, available tracks the real MAIN-armed signal (CRUISE_AVAILABLE
+    # from cam bus 2) so standby lateral only engages when cruise is armed. acc_on_off_pt is
+    # a latched status on the X70 (always True), NOT the MAIN button — see MADS-DEBUG-HANDOFF.
+    ret.cruiseState.available = bool(self.cruise_avail_cam) if self.mads_enabled else True
 
     self.res_btn_pressed = bool(cp.vl["ACC_BUTTONS"]["RES_BUTTON"])
     prev_distance_val = self.distance_val
@@ -211,7 +221,7 @@ class CarState(CarStateBase):
     ret.cruiseState.speed = ret.cruiseState.speedCluster / HUD_MULTIPLIER
     self.cruise_standstill = bool(cp_cam.vl["ACC_CMD"]["STANDSTILL_REQ"]) and not ret.gasPressed
     ret.cruiseState.standstill = False
-    ret.cruiseState.nonAdaptive = not (self.acc_on_off or self.gas_override) if self.mads_enabled else False
+    ret.cruiseState.nonAdaptive = False
 
     # MADS DIAGNOSTIC: log all MAIN-related signals every ~2 sec to find which one works on X70
     if self.mads_enabled:
@@ -220,7 +230,7 @@ class CarState(CarStateBase):
       self._dbg_cnt += 1
       if self._dbg_cnt % 100 == 0:
         from openpilot.common.swaglog import cloudlog
-        cloudlog.warning(f"MADS_SIG: acc_on_off_pt={self.acc_on_off} acc_on_off_cam={self.acc_on_off_cam} cruise_avail_cam={self.cruise_avail_cam} gas_override={self.gas_override} is_icc_on={self.is_icc_on} nonAdaptive={ret.cruiseState.nonAdaptive} cruise_enabled={ret.cruiseState.enabled} gear={ret.gearShifter}")
+        cloudlog.warning(f"MADS_SIG: acc_on_off_pt={self.acc_on_off} acc_on_off_cam={self.acc_on_off_cam} cruise_avail_pt={self.cruise_avail_pt} cruise_avail_cam={self.cruise_avail_cam} cruise_ctrl_en={self.cruise_ctrl_en} driving_modes_pt={self.driving_modes_pt} driving_modes_cam={self.driving_modes_cam} cruise_btn={self.cruise_btn} cruise_disabled_cam={self.cruise_disabled_cam} motion_control_cam={self.motion_control_cam} gas_override={self.gas_override} is_icc_on={self.is_icc_on} nonAdaptive={ret.cruiseState.nonAdaptive} cruise_enabled={ret.cruiseState.enabled} gear={ret.gearShifter}")
     ret.cruiseState.enabled = (
       cp_cam.vl["ACC_CMD"]["ACC_REQ"] + cp_cam.vl["ACC_CMD"]["STANDSTILL_REQ"] + cp_cam.vl["ACC_CMD"]["ACCEL_ALLOWED"]
     ) > 1

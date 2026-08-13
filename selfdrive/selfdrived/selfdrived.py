@@ -219,10 +219,12 @@ class SelfdriveD:
           self.events.add(EventName.pcmEnable)
 
       # MADS: compute lat_only EARLY so the gas gate below uses the current frame.
-      # lat_only = True when MAIN armed (nonAdaptive=False via is_icc_on) but stock ACC off.
-      # When MADS off: nonAdaptive is always False (original), so this never changes behavior.
+      # lat_only = True only when MAIN is armed (cruiseState.available, driven by
+      # CRUISE_AVAILABLE from cam bus 2) but stock ACC is off (cruiseState.enabled=False).
+      # acc_on_off_pt is a latched status on the X70 (always True), so we gate on `available`
+      # instead of the old `nonAdaptive` logic — see MADS-DEBUG-HANDOFF.
       if self.mads_enabled:
-        self.lat_only = (not CS.cruiseState.nonAdaptive and not CS.cruiseState.enabled
+        self.lat_only = (CS.cruiseState.available and not CS.cruiseState.enabled
                          and CS.gearShifter == car.CarState.GearShifter.drive)
       else:
         self.lat_only = False

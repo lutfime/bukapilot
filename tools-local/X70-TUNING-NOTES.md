@@ -271,3 +271,24 @@ The user tunes PID values (kp, ki, kf, LAT_SMOOTH, STEER_DELTA) on the **device 
 **Incident:** Claude deployed kp 0.03/0.075 (its own old values) and overwrote the user's device-tuned kp 0.04/0.09 without asking. The user lost their tuning work. The user ONLY asked to lower the low-speed kp (0.04→0.03); the 0.09 at 54 km/h should have been preserved.
 
 
+
+## kf 0.0001 → 0.00015 RESULT (drive 2026-08-14--00-45-49, wmiv12, PID, 10 min, 16 segs)
+
+Device PID values for this drive (interface.py): kpV=[0.0005,0.005,0.08,0.15,0.25],
+kiV=[0.001,0.005,0.03,0.4,0.5], **kf=0.00015**, STEER_DELTA=10/10, LAT_SMOOTH=0.5.
+
+**kf boost worked as intended** — feedforward became a major, anticipatory contributor:
+| speed | |out| | p | i | **f** | saturation |
+|-------|------|----|----|------|------------|
+| 8-15 m/s | 0.212 | 51% | 11% | **38%** | 0% |
+| 15-25 m/s | 0.206 | 49% | 13% | **38%** | 0% |
+
+- f-term: **9% → 38%** of output (was negligible; now steers INTO corners early — correct direction).
+- i-term low (11-13%) → little integrator windup. Zero saturation across all speeds.
+- Corner torque cmd: p50=0.25, p90=0.74 (firm, not railing; max 1.0).
+- **35 disengagements, ALL brake — ZERO unexplained steering releases.** The old dangerous
+  wobble-induced releases are gone (STEER_DELTA 10/10 + lower kp fixed the safety side).
+- Low-speed (<8 m/s) wobble still present: steer-cmd reversals p50=5.4/s (target <1.5). This is
+  the known hard problem — model desired-path noise at low speed, not the PID. No longer causes
+  releases, so it's a feel issue, not a safety issue.
+- VERDICT: safe + more anticipatory than before. User subjectively: "feels ok".

@@ -661,3 +661,50 @@ not simulator-guided fp16 surgery.
 ### WMI v12 caveat
 The other agent noted WMI may have braking issues too. **The only model confirmed working
 without issues is the default 0.10.3.** WMI + opm10v3 (INT8) need on-road validation.
+
+---
+
+## ⛔ ON-ROAD TEST FAILED — opm10v3 outputs ALL ZEROS on real device (2026-08-14)
+
+**This is the pending on-road validation — and it FAILED. Do NOT use opm10v3 on the road.
+Lateral is DEAD (zero curvature command). Use wmiv12 or default 0.10.3 instead.**
+
+### Evidence (drive 2026-08-14--01-02-21, car-park, SelectedDrivingModel=opm10v3)
+modeld loaded cleanly — swaglog confirms the intended 3-split config, NO errors/tracebacks:
+  - selection: `SelectedDrivingModel='opm10v3' 3split=True`
+  - vision   = driving_vision_opm10v3.rknn          (C++ runner)
+  - on_policy = driving_on_policy_opm10v3_erf.rknn   (Python rknnlite)
+  - off_policy= driving_off_policy_opm10v3.rknn      (Python rknnlite)
+
+But modelV2 output across **1615 frames** (execTime 37-42ms, frameDropPerc=0 → inference RAN):
+  - desiredCurvature: |min|=0.0000 |max|=0.0000   (0% non-zero — should be 87-100% like wmiv12)
+  - velocity.x[0]: stuck at 18.6 m/s               (car was at vEgo p50=1.3 m/s in car park)
+  - position: 0; disengagePredicted=-1 (sentinel); engagedProb decaying → 0
+  - These are DEFAULT/UNPOPULATED values, not real predictions.
+
+Contrast: same car, wmiv12 drive (2026-08-14--00-45-49) → desiredCurvature 87-100% non-zero,
+|max|=0.05-0.08. Working. So the failure is opm10v3-specific.
+
+### Critical md5 finding — erf == int8_v2 == base (all IDENTICAL policy files)
+```
+on_policy:   cafc2cd9b691571e4f933d41fe3187c5  = erf.rknn = int8_v2.rknn = (base).rknn
+off_policy:  7fd86d805155569562ea95e6bbfd0b60  = erf.rknn = int8_v2.rknn = (base).rknn
+  (only int8 v1 differs: on=94ad33.. off=c1e2f8..  — but v1 was already known all-zeros)
+```
+So whichever name modeld loads (erf / int8_v2 / base), it runs the SAME bytes, and they output
+zeros. The "INT8 v2 = simulator-verified non-zero" does NOT reproduce on a real on-road drive.
+
+### Root cause (TBD — needs the model-conversion agent)
+The model RUNS (37ms, no crash) but produces zero. "0% overflow" is TRUE but misleading — zeros
+are finite (no overflow) yet carry no signal. Non-zero was verified only in the OFFLINE simulator;
+on the real NPU with real camera frames the policy heads emit zero. Likely culprits:
+  1. C++ vision output (Fix-E pass_through) → Python policy input handoff feeds garbage/zero features
+  2. driving_3split_rknn.py Python rknnlite runner input-prep differs from simulator on real frames
+  3. metadata/slice mapping between vision output and policy input
+The vision→policy boundary (C++ → Python) is the most likely place real frames diverge from sim.
+
+### Action
+- opm10v3 is NOT road-ready. Keep device on wmiv12 (or default). SelectedDrivingModel currently
+  = opm10v3 on device — **change it back before driving**, or lateral will be dead.
+- Re-verify any future opm10v3 fix against a REAL device drive (desiredCurvature non-zero %), NOT
+  just the simulator. The simulator-green / device-zero gap is the recurring trap here.

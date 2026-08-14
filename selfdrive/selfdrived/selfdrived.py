@@ -249,9 +249,11 @@ class SelfdriveD:
         self.lat_only_unavailable_count = 0
 
       # Disable on rising edge of accelerator or brake. Also disable on brake when speed > 0
-      # MADS: in standby-lateral, gas is manual and must NOT disengage. Brake always disengages.
+      # MADS: gas is manual in standby (lat_only AND not cruise_enabled). During full ACC,
+      # gas disengages normally (lat_only is True during ACC but cruise_enabled is also True).
       gas_disengage = CS.gasPressed and not self.CS_prev.gasPressed and self.disengage_on_accelerator
-      if (gas_disengage and not self.lat_only) or \
+      mads_standby_gas_block = self.lat_only and not CS.cruiseState.enabled
+      if (gas_disengage and not mads_standby_gas_block) or \
         (CS.brakePressed and (not self.CS_prev.brakePressed or not CS.standstill)) or \
         (CS.regenBraking and (not self.CS_prev.regenBraking or not CS.standstill)):
         self.events.add(EventName.pedalPressed)

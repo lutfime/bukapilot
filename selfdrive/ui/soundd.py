@@ -137,12 +137,6 @@ class Soundd:
   def update_alert(self, new_alert, quiet_mode=False, alert_type_name=None):
     if quiet_mode and alert_type_name and "laneChangeBlocked" in alert_type_name:
       return
-    # MADS standby: pressing the brake while in standby-lateral fires pedalPressed/noEntry
-    # (a NoEntryAlert → refuse sound). refuse bypasses the quiet-mode gate below, so it would
-    # beep even in silent mode. Suppress it — it's informational "can't engage" feedback, not a
-    # safety alert. Engaged+brake (pedalPressed/userDisable → disengage) is already silenced.
-    if quiet_mode and alert_type_name and "pedalPressed/noEntry" in alert_type_name:
-      return
     if quiet_mode and new_alert != AudibleAlert.refuse:
       allowed = new_alert in {
         AudibleAlert.none,

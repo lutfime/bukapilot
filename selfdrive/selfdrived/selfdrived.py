@@ -491,7 +491,13 @@ class SelfdriveD:
     #    already gated by `gas_disengage and not self.lat_only` earlier in this
     #    function. Brake-induced pedalPressed flows through and fires USER_DISABLE.
     if self.lat_only:
-      if not self.enabled:
+      # Only (re-)arm lateral when NOT braking. Without this gate, lat_only injects
+      # pcmEnable every frame while the brake is held -> the blocked engage attempt fires
+      # pedalPressed/noEntry (refuse beep, which bypasses quiet mode) every frame. Brake
+      # still disengages instantly via USER_DISABLE above; lateral resumes the moment the
+      # brake is released. (Drive data confirms latActive is blocked during braking and
+      # returns in 0.00s on release -- this gate preserves that resume-on-release behavior.)
+      if not self.enabled and not CS.brakePressed:
         self.events.add(EventName.pcmEnable)
       # Strip events that fire because stock ACC is off or available signal dropped (noise).
       # wrongCarMode fires when cruiseState.available=False (noise drop) — must strip or it

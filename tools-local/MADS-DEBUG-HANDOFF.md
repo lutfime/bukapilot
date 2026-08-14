@@ -1,14 +1,18 @@
 # MADS Debug Log — Proton X70 on Kommu KA2
 
-## Session: 2026-08-13
+## Sessions: 2026-08-13 → 2026-08-14
 
 ## Goal
 Standby lateral steering for Proton X70 on Kommu KA2: openpilot steers when MAIN cruise button is armed (no SET pressed), gas is manual, brake disengages.
 
-Three states:
-- **Disabled**: MAIN off → nothing
-- **Standby**: MAIN armed, no SET → lateral only, gas manual
-- **Enabled**: SET pressed → full lat + long (normal ACC)
+Three states (target — not fully enforced for long yet):
+- **Off**: MAIN off → nothing
+- **Standby**: MAIN armed, no SET → lateral only, driver gas/brake; **OP must never command long**
+- **ACC**: SET pressed → full lat + long (normal ACC)
+
+**2026-08-14 status:** Bugs #1–#2 fixed. Bug #3 mitigated via `lat_only` HOLD (noisy MAIN).
+Bug #4 (OP long in standby) diagnosed; proper Off/Standby/ACC long gate **not implemented yet**
+(user: notes only, no room for dangerous one-liner shortcuts).
 
 ---
 
@@ -63,7 +67,7 @@ made `nonAdaptive=False` always → `lat_only = not False and not enabled and dr
 
 ---
 
-## Bug #3: gas disengages in standby — UNRESOLVED
+## Bug #3: gas disengages in standby — MITIGATED (HOLD), not a clean-signal fix
 
 ### Symptom
 When in MADS standby (MAIN pressed, GREEN), pressing gas intermittently disengages openpilot. User reports this has never happened on other cars — gas should NOT disengage in standby.
@@ -74,21 +78,26 @@ When in MADS standby (MAIN pressed, GREEN), pressing gas intermittently disengag
 self.cruise_avail_cam = bool(cp_cam.vl["PCM_BUTTONS"]["CRUISE_AVAILABLE"])
 ```
 
-Each 1-3s drop makes:
+Each 1-3s drop (without HOLD) made:
 1. `cruiseState.available = False`
 2. `lat_only = False`
 3. gas rising edge fires `gas_disengage and not lat_only` → `pedalPressed` → **disengage**
 
 Gas is just the trigger. The root cause is the noisy `cruise_avail_cam` signal dropping, which makes openpilot think MAIN was released.
 
+### Mitigation in tree (NOT a clean MAIN signal)
+`selfdrived` `lat_only` HOLD: once True, hold through `available` noise; clear on gear≠drive,
+or `!enabled && !available`, or `available=False` >4s while enabled. Still a timeout-based
+compromise — user prefers no magic numbers long-term if a clean MAIN is found.
+
 ### Signal investigation (all candidates checked)
 
 | Signal | Bus | Message | Result |
 |---|---|---|---|
-| `ACC_ON_OFF_BUTTON` | 0 (pt) | PCM_BUTTONS | **always True** — latched status, NOT MAIN |
-| `ACC_ON_OFF_BUTTON` | 2 (cam) | PCM_BUTTONS | noisy, True in park, blips in drive |
-| `CRUISE_AVAILABLE` | 0 (pt) | PCM_BUTTONS | **always True** — useless (same as acc_on_off_pt) |
-| `CRUISE_AVAILABLE` | 2 (cam) | PCM_BUTTONS | **noisy** — True during standby but drops 1-3s |
+| `ACC_ON_OFF_BUTTON` | 0 (pt) | PCM_BUTTONS | **always 0** (MADS_BIT 2026-08-14) — not MAIN; old "always True" obsolete |
+| `ACC_ON_OFF_BUTTON` | 2 (cam) | PCM_BUTTONS | often 1 when MAIN off; not the standby arm bit |
+| `CRUISE_AVAILABLE` | 0 (pt) | PCM_BUTTONS | **always 0** (MADS_BIT) — useless for MAIN |
+| `CRUISE_AVAILABLE` | 2 (cam) | PCM_BUTTONS | **MAIN tracker** — True in standby, noisy 1-3s drops |
 | `CRUISE_CONTROL_EN` | 0 (pt) | GAS_PEDAL | **always False** — not the standby signal |
 | `DRIVING_MODES` (2-bit) | 0 (pt) | PCM_BUTTONS | **always 0** — not useful |
 | `DRIVING_MODES` (2-bit) | 2 (cam) | PCM_BUTTONS | mostly 0, briefly 2 (SET press?) |
@@ -98,7 +107,9 @@ Gas is just the trigger. The root cause is the noisy `cruise_avail_cam` signal d
 | `ICC_ON` | 2 (cam) | PCM_BUTTONS | **always False** — ICC mode off |
 | `GAS_OVERRIDE` | 0 (pt) | PCM_BUTTONS | **always False** |
 
-**Conclusion: NO clean signal exists on the X70 for "MAIN armed / standby".** Only `cruise_avail_cam` (bus 2) tracks MAIN, but it's inherently noisy (1-3s drops from the camera ECU). Bus 0's version is always True (useless).
+**Conclusion: NO clean signal exists on the X70 for "MAIN armed / standby".** Only `cruise_avail_cam`
+(bus 2 bit 17) tracks MAIN, and it's noisy (1-3s drops). Bus 0 b16/b17 are real **0** (see MADS_BIT
+below) — useless for MAIN. Older table rows saying bus 0 "always True" are **obsolete**.
 
 ### `cruise_avail_cam` noise pattern (from 20260813-164247 logs)
 ```
@@ -115,134 +126,80 @@ The False periods are 1-3 seconds — too long for a simple debounce, too short 
 
 ---
 
-## CRITICAL FINDING (2026-08-13): DBC bit swap + possible NaN contamination
+## CRITICAL FINDING (2026-08-13): DBC bit naming KA1 vs KA2
 
-### DBC bit positions are SWAPPED between KA1 and KA2
+### DBC bit positions / names differ between KA1 and KA2
 
 The PCM_BUTTONS message (addr 419) defines ACC_ON_OFF_BUTTON and CRUISE_AVAILABLE
-at **different bit positions** in KA1 vs KA2 DBC files:
+at **different bit positions / names** in KA1 vs KA2 DBC files:
 
-| Bit | KA1 DBC (`ka1s_snapshot`) | KA2 DBC (current `x70-map`) |
+| Bit | KA1 DBC (`ka1s_snapshot`) | KA2 DBC (current) |
 |---|---|---|
 | **16** | `ACC_SET` | `ACC_ON_OFF_BUTTON` |
 | **17** | `ACC_ON_OFF_BUTTON` | `CRUISE_AVAILABLE` |
 
-**They are reading the SAME physical bits but with DIFFERENT names.**
+**Same physical bits, different names.** KA2's cam bit 17 (`CRUISE_AVAILABLE`) is the MAIN tracker
+(same physical bit KA1 called `ACC_ON_OFF_BUTTON`). proton_mads also used cam `CRUISE_AVAILABLE`.
 
-- KA1 read bit 17 (labeled `ACC_ON_OFF_BUTTON` in KA1's DBC) → clean MAIN button signal → worked
-- KA2 reads bit 16 (labeled `ACC_ON_OFF_BUTTON` in KA2's DBC) → this is actually what KA1 called `ACC_SET` → "always True" (wrong signal entirely)
-- KA2 calls bit 17 `CRUISE_AVAILABLE` → this is the SAME physical bit KA1 called `ACC_ON_OFF_BUTTON`
+### MADS_BIT probe (2026-08-14) — NaN theory DISPROVEN
 
-**The signal we've been calling "CRUISE_AVAILABLE" (bit 17, noisy on cam bus) IS the signal KA1 successfully used as ACC_ON_OFF_BUTTON (the MAIN button).** Same bit, same physical CAN signal — just renamed in the DBC.
+`MADS_BIT` logs raw b16/b17 on pt+cam with `ts_nanos` / NaN / UNSEEN checks
+(`result/device-logs-20260814-082039`).
 
-### proton_mads never read ACC_ON_OFF_BUTTON
+| Signal | Bus | Result |
+|---|---|---|
+| b16 (`ACC_ON_OFF_BUTTON`) | pt (0) | always **0** (real frames, not NaN/UNSEEN) |
+| b17 (`CRUISE_AVAILABLE`) | pt (0) | always **0** (real frames) |
+| b16 | cam (2) | often **1** when MAIN not armed |
+| b17 | cam (2) | **1** when MAIN standby (`avail=True`) |
 
-The proton_mads branch does NOT reference `ACC_ON_OFF_BUTTON` anywhere in its carstate.py.
-It uses `CRUISE_AVAILABLE` (bit 17) from camera bus — which is the same bit KA1 called
-ACC_ON_OFF_BUTTON. proton_mads was on the right track but was abandoned for firmware reasons.
+**Conclusion:** PCM_BUTTONS **does** arrive on bus 0. Earlier "always True on bus 0" was a bad
+`bool()` / old-path artifact — **not** a clean MAIN on pt. **MAIN = cam b17 only.** No KA1-style
+pt MAIN to fall back on. Stick with cam `CRUISE_AVAILABLE` + engagement HOLD for noise.
 
-### Possible NaN contamination in bus 0 readings
+Debounce (0.3s) insufficient for 1–3s drops and dangerous if extended. Blind latch rejected by
+user when unsure. Current tree uses `lat_only` HOLD (see below) for engagement/gas gate only.
 
-The signal investigation above shows "always True" for bus 0 readings of both
-ACC_ON_OFF_BUTTON and CRUISE_AVAILABLE. But this may be a **NaN bug**:
-
-1. `("PCM_BUTTONS", math.nan)` was added to the powertrain parser for diagnostics
-2. `math.nan` is the default when the message hasn't been received on that bus
-3. In Python: `bool(float('nan'))` = **True**
-4. If PCM_BUTTONS doesn't actually arrive on bus 0, ALL signals return NaN → `bool(NaN)` = True
-
-**The "always True on bus 0" results may be NaN being misinterpreted as True, not the actual
-CAN signal value.** The signal investigation did NOT check for NaN — all readings were wrapped
-in `bool()` which converts NaN to True.
-
-### What needs to be verified
-
-1. **Does PCM_BUTTONS actually arrive on bus 0?** Test with NaN check:
-   ```python
-   val = cp.vl["PCM_BUTTONS"]["ACC_ON_OFF_BUTTON"]
-   if val != val:  # NaN check (NaN != NaN is True in Python)
-       print("NOT RECEIVED on bus 0")
-   else:
-       print(f"REAL VALUE = {val}")
-   ```
-
-2. **If PCM_BUTTONS arrives on bus 0, what are the actual bit 16 and bit 17 values?**
-   Read raw values (not bool-converted) to distinguish 0, 1, and NaN.
-
-3. **Is bit 17 (KA1's ACC_ON_OFF_BUTTON = KA2's CRUISE_AVAILABLE) clean on bus 0?**
-   If PCM_BUTTONS exists on bus 0 and bit 17 tracks MAIN cleanly (no noise), we can use it
-   directly — matching KA1's working approach. The noise may only affect the camera bus (bus 2),
-   not the powertrain bus (bus 0).
-
-4. **Why was the DBC changed between KA1 and KA2?** The bit swap may have been accidental
-   during an opendbc update. If KA1's DBC was correct (bit 17 = ACC_ON_OFF_BUTTON),
-   the KA2 DBC may have a bug.
-
-### Impact on previous signal investigation
-
-The signal investigation table (above) may be WRONG for bus 0 entries. All "always True"
-readings on bus 0 could be NaN artifacts. The investigation needs to be re-run with NaN
-checking to get accurate results.
-A 30-frame (0.3s) falling-edge debounce was attempted but:
-1. Insufficient: the drops are 1-3s, debounce only covers 0.3s
-2. Dangerous: a longer debounce would mask real MAIN release (steering after driver turned off cruise)
-
-A latch (hold `lat_only=True` for 3s of signal False) was also attempted but **reverted** — user rejected as "ridiculous and stupid" and reminded not to write code when unsure. Gas-disengage-on-standby has never been seen on other cars, so the root cause (noisy signal) must be understood before any fix.
-
-### What is NOT the answer
-- **Debounce**: insufficient for 1-3s drops, dangerous if extended
-- **Bus 0 CRUISE_AVAILABLE**: always True (useless)
-- **Any other DBC signal**: none track MAIN cleanly
-
-### Open questions for next session
-1. Is `cruise_avail_cam` noise a CAN bus issue (bus 2 timing, panda firmware) or the camera ECU itself?
-2. Is there a signal we haven't found (undocumented DBC, different message) that cleanly indicates "MAIN armed"?
-3. How does KA1 handle this? KA1 used `ACC_ON_OFF_BUTTON` from bus 0 (always True on X70) — did KA1 have the same gas-disengage issue, or did KA1 use a different gate?
-4. Does the X70 HUD read `cruise_avail_cam` directly, or does it use a different (cleaner) internal signal?
-5. Should we investigate the panda's raw CAN dump (not the parsed value) to see if the ECU truly sends CRUISE_AVAILABLE=0 for 1-3s, or if the CANParser is dropping it?
+### Remaining open questions (bits / MAIN)
+1. Is cam b17 noise ECU vs CAN/parser? (raw CAN dump of addr 419 bus 2 still useful)
+2. Any undocumented cleaner MAIN signal?
+3. Why DBC renamed between KA1/KA2?
 
 ---
 
-## Current state of code on device (branch x70-map)
+## Current state of code (local tree vs device — verify before assuming)
 
-### Files modified (all deployed):
+### In local working tree (as of 2026-08-14 notes update):
 1. **`opendbc_repo/opendbc/car/proton/carstate.py`**:
-   - `_update_lks_state(self, cp, cp_cam)` — fixed NameError (Bug #1)
-   - `ret.cruiseState.available = bool(self.cruise_avail_cam) if self.mads_enabled else True` (Bug #2 fix)
-   - `ret.cruiseState.nonAdaptive = False` (reverted broken MADS override)
-   - MADS_SIG diagnostic logs: `acc_on_off_pt`, `acc_on_off_cam`, `cruise_avail_pt`, `cruise_avail_cam`, `cruise_ctrl_en`, `driving_modes_pt`, `driving_modes_cam`, `cruise_btn`, `cruise_disabled_cam`, `motion_control_cam`, `gas_override`, `is_icc_on`, `nonAdaptive`, `cruise_enabled`, `gear`
-
+   - NameError fix; `available` from cam `CRUISE_AVAILABLE` when MADS on
+   - `MADS_BIT` diagnostic (b16/b17 pt+cam, ts/NaN/UNSEEN)
 2. **`selfdrive/selfdrived/selfdrived.py`**:
-   - `lat_only = CS.cruiseState.available and not CS.cruiseState.enabled and drive` (gated on `available` not `nonAdaptive`)
-   - pcmEnable injection + disabler stripping at end of update_events (unchanged from handoff)
-   - MADS_DEBUG logging (unchanged)
-
+   - `lat_only` HOLD SM (noise tolerance + 4s MAIN-off timeout)
+   - pcmEnable inject + strip pcmDisable/buttonCancel/cruiseDisabled/wrongCarMode while `lat_only`
+   - gas disengage skipped when `lat_only`; brake always disengages
+   - `lat_only` stays True during full ACC (`cruise_enabled` does **not** clear it)
+   - `lat_only` is **local only** — not published to cereal / not visible to controlsd
 3. **`selfdrive/controls/controlsd.py`**:
-   - `CC.longActive = False` when MADS standby (unchanged from handoff)
+   - Provisional long gate present in tree:
+     `if mads and CC.enabled and not CS.cruiseState.enabled: CC.longActive = False`
+   - **NOT accepted as final** (see Bug #4 / design note). Do not treat as "safe forever."
+4. **appbridged / iOS** — MadsEnabled toggle (unchanged)
 
-4. **`selfdrive/appbridged/appbridged.py`** — MadsEnabled file toggle (unchanged)
+### Reverted / deprecated:
+- 30-frame debounce on `cruise_avail_cam`
+- Early latch attempts user rejected when unsure
+- `result/deploy_mads_debounce.sh`, `deploy_mads_latch.sh` — DEPRECATED
 
-5. **iOS Swift** — MADS toggle in SettingsSheet, LogsView tab (unchanged)
+### Deploy scripts
+- `result/deploy_mads_crashfix.sh` — Bug #1
+- `result/deploy_mads_standby_gate.sh` — Bug #2
+- `result/deploy_mads_sig_diag.sh` — signal scan
+- `result/deploy_mads_bit_diag.sh` — MADS_BIT probe
+- `result/deploy_mads_long_fix.sh` — provisional long gate (do not ship as final without SET proof / SM)
 
-### What's NOT deployed (reverted):
-- 30-frame debounce on `cruise_avail_cam` (insufficient + dangerous)
-- 3s latch on `lat_only` (user rejected — "don't write code if unsure")
-
----
-
-## Deploy scripts created this session
-- `result/deploy_mads_crashfix.sh` — Bug #1 fix (card NameError)
-- `result/deploy_mads_standby_gate.sh` — Bug #2 fix (auto-steer without MAIN)
-- `result/deploy_mads_sig_diag.sh` — expanded MADS_SIG diagnostics (all candidate signals)
-- `result/deploy_mads_debounce.sh` — DEPRECATED (reverted, don't use)
-- `result/deploy_mads_latch.sh` — DEPRECATED (reverted, don't use)
-
-## Log dumps collected this session
-- `result/device-logs-20260813-155514` — Bug #1 (card crash)
-- `result/device-logs-20260813-160608` — Bug #2 (acc_on_off_pt always True)
-- `result/device-logs-20260813-161722` — Bug #3 (cruise_avail_cam flapping, gas disengage)
-- `result/device-logs-20260813-163248` — Bug #3 (expanded MADS_SIG, all candidates checked)
-- `result/device-logs-20260813-164247` — Bug #3 (cruise_avail_pt vs cam comparison)
+### Log dumps
+- `result/device-logs-20260813-*` — Bugs #1–#3
+- `result/device-logs-20260814-082039` — MADS_BIT (MAIN=cam b17; pt bits 0); standby+gas; **no SET/full ACC** (`cruise_en=True` absent)
 
 ---
 
@@ -271,6 +228,9 @@ A latch (hold `lat_only=True` for 3s of signal False) was also attempted but **r
 # MADS signal diagnostic (shows raw CAN values, all candidates):
 grep MADS_SIG /data/log/swaglog.* | python3 -c "import sys,json; [print(json.loads(l).get('msg$s','')) for l in sys.stdin]"
 
+# Bit probe (MAIN = cam b17):
+grep MADS_BIT /data/log/swaglog.* | python3 -c "import sys,json; [print(json.loads(l).get('msg$s','')) for l in sys.stdin]"
+
 # MADS state debug (shows lat_only, enabled, etc):
 grep MADS_DEBUG /data/log/swaglog.* | python3 -c "import sys,json; [print(json.loads(l).get('msg$s','')) for l in sys.stdin]"
 
@@ -278,34 +238,162 @@ grep MADS_DEBUG /data/log/swaglog.* | python3 -c "import sys,json; [print(json.l
 grep '"daemon": "card"' /data/log/swaglog.* | grep -i error
 ```
 
-## MADS standby brake SOUND in silent mode (2026-08-14) — diagnosed, fix proposed
+---
 
-**Symptom:** QuietMode (silent mode) ON. In MADS standby (MAIN armed, no SET), pressing brake
-still plays a sound. Engaged+brake is correctly silent. User intuition correct: Kommu added no
-MADS-aware sound handling.
+## Bug #4: OP still commands gas/brake in standby (intermittent) — OPEN
 
-**Root cause (confirmed from drive 2026-08-14--00-45-49 selfdriveState alerts + soundd.py):**
-- Engaged + brake  → event `pedalPressed/userDisable` → AudibleAlert **disengage** (n=672)
-  → disengage is in the quiet-mode SUPPRESS list → silent. ✓
-- Standby + brake  → event `pedalPressed/noEntry`     → AudibleAlert **refuse** (n=5281)
-  → NoEntryAlert uses refuse; refuse is EXCLUDED from the quiet-mode gate
-    (`if quiet_mode and new_alert != AudibleAlert.refuse` in soundd.py update_alert) → ALWAYS plays.
-- QuietMode=1 verified set on device (/data/params/d/QuietMode).
+**User clarification (important):** Not “driver foot gas works” (that is intended in standby).
+Complaint is **openpilot still actuating longitudinal** sometimes while MAIN standby — dangerous.
 
-**Proposed fix (surgical, matches existing laneChangeBlocked pattern at soundd.py:138):**
-In `selfdrive/ui/soundd.py` `update_alert()`, the laneChangeBlocked line already suppresses one
-specific refuse-type in quiet mode. Add the analogous line for the pedal no-entry:
+### Root cause (code, high confidence)
+`controlsd` builds:
 ```python
-  if quiet_mode and alert_type_name and "laneChangeBlocked" in alert_type_name:
-    return
-+ if quiet_mode and alert_type_name and "pedalPressed/noEntry" in alert_type_name:
-+   return
+CC.longActive = CC.enabled and ... and openpilotLongitudinalControl
+# then MADS clear — historically gated wrong:
+if mads and CC.latActive and not CS.cruiseState.enabled:
+    CC.longActive = False
 ```
-This suppresses ONLY the pedal no-entry refuse sound in silent mode. All other refuse sounds
-(AEB, wrongCarMode, system errors) still play. NOT yet applied — awaiting user OK.
 
-## MADS standby GAS still running — fix staged, NOT deployed (2026-08-14)
-controlsd.py longActive gate: `CC.latActive` (noisy) → `CC.enabled` (stable). Edit is in the
-working tree + result/deploy_mads_long_fix.sh ready. Safety verified (only fires in standby =
-enabled & !cruise_enabled; full ACC / disengage / no-MADS unchanged). Deployment deferred per
-user ("get back to this later").
+MAIN / `lat_only` do **not** drive `latActive`. `latActive` is an actuator gate:
+
+```python
+CC.latActive = active and not steerFault* and (not standstill or steerAtStandstill)
+```
+
+Proton has no `steerAtStandstill`; standstill ≈ `vEgo ≤ 0.3 m/s`. So in standby with
+`enabled=True` and stock ACC off, when you crawl/stop or get a temp steer fault:
+
+1. `latActive` → False (steer pauses — expected)
+2. MADS long clear **skipped** (because it required `latActive`)
+3. `longActive` stays True → `create_acc_cmd` sends `ACC_REQ` + planner accel → **OP gas/brake**
+
+Matches “not always, but sometimes” (stop-and-go). 1 Hz `MADS_DEBUG` won’t show frame-level blips;
+need qlog `carControl.longActive` for proof.
+
+### Why `lat_only` alone is NOT the long fix
+User asked: “when `lat_only` active, no long — why not gate on that?”
+
+| Flag | Owner | Meaning today |
+|---|---|---|
+| `lat_only` | selfdrived only | Survive MAIN noise; skip gas-disengage; keep OP enabled without stock ACC |
+| `cruiseState.enabled` | carstate (stock ACC bits) | SET / full ACC |
+| `latActive` | controlsd | Allowed to steer **this frame** |
+| `longActive` | controlsd | Allowed to command ACC **this frame** |
+
+`lat_only` **stays True during full ACC** on purpose (cancel→standby / noise). So
+`if lat_only: longActive=False` would **kill OP long after SET** — wrong.
+
+Bug #3 HOLD fixed **gas disengaging OP**, not **OP commanding long**. Different bug.
+
+`lat_only` is also **not published** — controlsd cannot read it today.
+
+### Provisional one-liner (in tree) — NOT final
+```python
+if mads and CC.enabled and not CS.cruiseState.enabled:
+    CC.longActive = False
+```
+- Fixes standby long when `latActive` drops (good for Bug #4 symptom).
+- **Risk:** if `cruiseState.enabled` flickers False during real SET/ACC, long drops briefly
+  (jerk / ACC release). While *moving*, old `latActive && !cruise_en` gate already had that
+  risk; new gate also applies at **standstill during ACC**.
+- **Unproven on car:** latest bit dump had **no** `cruise_en=True` (no SET road data).
+- User: leave **no room for dangerous error** → do **not** ship one-liner as final safety story.
+
+### Required design: Off / Standby / ACC (not just `lat_only`)
+Goal modes:
+
+| Mode | Steer | OP long |
+|---|---|---|
+| **Off** | no | no |
+| **Standby** (MAIN, no SET) | yes | **never** |
+| **ACC** (SET) | yes | yes |
+
+Today’s `lat_only` SM ≈ engagement/MAIN noise only — **Standby and ACC collapsed into one flag**.
+Long is a separate raw-bit one-liner. Incomplete.
+
+Safe long rule: **allow long only in ACC mode; force off in Standby and Off.**
+
+Transitions should be explicit (prefer events / latched edges over trusting every frame of
+`ACC_REQ`/`ACCEL_ALLOWED`):
+
+- **→ ACC:** SET / rising `cruiseState.enabled` (latch once)
+- **→ Standby:** cancel / stock ACC off while MAIN still armed
+- **→ Off:** brake / MAIN off / gear / USER_DISABLE
+
+If `cruise_en` is noisy in ACC, either prove stability on a SET drive, or latch ACC mode and
+leave only on cancel/brake/disengage — **not** on a single False sample. Avoid blind long
+timeouts if possible; any hold must be justified by measured noise, not guesswork.
+
+**Do not implement yet** — notes only per user (2026-08-14).
+
+---
+
+## Architecture reminder (why layers confuse)
+
+```
+MAIN (cam b17) → cruiseState.available → lat_only HOLD (selfdrived)
+                      ↓
+              pcmEnable / strip events → enabled / active (selfdriveState)
+                      ↓
+controlsd: latActive = active ∧ ¬standstill∧…     ← NOT MAIN
+           longActive = enabled ∧ …  then MADS gate ← must be Standby/ACC aware
+                      ↓
+Proton create_acc_cmd(longActive) → ACC_REQ / CMD on bus 0
+```
+
+---
+
+## MADS standby brake SOUND in silent mode (2026-08-14) — ROOT CAUSE = logic, FIXED
+
+**Symptom:** QuietMode (silent mode) ON. In MADS standby (MAIN armed, no SET), holding brake
+plays a persistent refuse beep. Engaged+brake is correctly silent.
+
+**Real root cause (logic, not sound):** the `lat_only` re-arm block in
+`selfdrived.py:update_events` injected `pcmEnable` **every frame while not enabled — including
+while the brake was held**:
+```python
+    if self.lat_only:
+        if not self.enabled:                       # UNCONDITIONAL — no brake check
+            self.events.add(EventName.pcmEnable)
+```
+So while braking: frame 1 brake → `USER_DISABLE` → OP disengages (disengage sound, already
+silent in quiet mode). Frame 2..N (brake still held): `lat_only` still true → injects
+`pcmEnable` → tries to re-engage → brake (`pedalPressed`) blocks it → typed `NO_ENTRY` →
+`NoEntryAlert` → AudibleAlert **refuse**. refuse is excluded from the soundd quiet-mode gate
+(`if quiet_mode and new_alert != AudibleAlert.refuse`) → beep every blocked attempt.
+
+This only shows in standby because ONLY `lat_only` injects `pcmEnable` continuously. Full ACC
+and MADS-off don't, so no persistent blocked-attempt beep there. User was right: "why does it
+try to engage while braking?" — it shouldn't.
+
+**Drive evidence (2026-08-14--00-45-49):** latActive while brake held = 2/19394 frames (~20 ms,
+the disengage transition) → lateral is correctly BLOCKED during braking. After brake release,
+latActive returns p50/p90 = 0.00 s → instant resume. So the fix must preserve resume-on-release.
+
+**FIX (selfdrived.py, applied in working tree, uncommitted for review):** gate the re-arm
+injection on "not braking":
+```python
+    if self.lat_only:
+        if not self.enabled and not CS.brakePressed:   # don't attempt while braking
+            self.events.add(EventName.pcmEnable)
+```
+- brake held → no engage attempt → no pedalPressed/noEntry → **no beep (fixed at the source)**
+- brake released → pcmEnable resumes → lateral re-engages instantly (resume-on-release preserved)
+- brake still disengages instantly via USER_DISABLE (path unchanged)
+
+**soundd.py patch REVERTED.** An earlier symptom-level fix (suppress `pedalPressed/noEntry` in
+quiet mode, commit 5395909) was reverted in the working tree — the selfdrived logic fix above is
+the single clean fix. (Device still has the harmless soundd patch keeping it quiet until the
+selfdrived fix is deployed; revert soundd on device at deploy time.)
+
+---
+
+## Next actions (when user says go — not now)
+1. Implement real **Off / Standby / ACC** mode for long (publish from selfdrived or equivalent);
+   force `longActive=False` in Standby only.
+2. Road-test **SET/full ACC** with high-rate logging of `cruise_en` / `longActive` before trusting
+   raw `!cruise_en` every frame.
+3. Keep Bug #3 HOLD only until cleaner MAIN exists; prefer measured noise over magic timeouts.
+4. DONE (logic fix): brake-during-standby re-arm gate in selfdrived.py — see
+   "MADS standby brake SOUND" section above. Awaiting deploy + road test.
+5. Refresh device deploy inventory so “what’s on car” matches notes.

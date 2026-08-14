@@ -109,8 +109,10 @@ class Controls:
     CC.longActive = CC.enabled and not any(e.overrideLongitudinal for e in self.sm['onroadEvents']) and self.CP.openpilotLongitudinalControl
     # MADS: in standby-lateral (OP active, stock ACC off), release longitudinal to driver.
     # CS.cruiseState.enabled here is the stock ACC state (unlatched by selfdrived) — when
-    # it's off but OP is active, we're in MADS standby and must not command ACC.
-    if self.mads_enabled and CC.latActive and not CS.cruiseState.enabled:
+    # it's off but OP is enabled, we're in MADS standby and must not command ACC.
+    # NOTE: gate on CC.enabled (stable), NOT CC.latActive (noisy — standstill/steerFault blips
+    # can drop latActive False for a frame, bypassing the gate → gas runs for that frame).
+    if self.mads_enabled and CC.enabled and not CS.cruiseState.enabled:
       CC.longActive = False
 
     actuators = CC.actuators

@@ -53,13 +53,6 @@ class Controls:
     self.LoC = LongControl(self.CP)
     self.VM = VehicleModel(self.CP)
     self.LaC: LatControl
-    # MADS (standby lateral): read toggle once at init (file-based, no Params rebuild).
-    self.mads_enabled = False
-    try:
-      with open("/data/params/MadsEnabled") as _f:
-        self.mads_enabled = _f.read().strip() == "1"
-    except (FileNotFoundError, OSError):
-      pass
     if self.CP.steerControlType == car.CarParams.SteerControlType.angle:
       self.LaC = LatControlAngle(self.CP, self.CI, DT_CTRL)
     elif self.CP.lateralTuning.which() == 'pid':
@@ -107,12 +100,9 @@ class Controls:
     CC.latActive = self.sm['selfdriveState'].active and not CS.steerFaultTemporary and not CS.steerFaultPermanent and \
                    (not standstill or self.CP.steerAtStandstill)
     CC.longActive = CC.enabled and not any(e.overrideLongitudinal for e in self.sm['onroadEvents']) and self.CP.openpilotLongitudinalControl
-    # MADS: in standby-lateral (OP active, stock ACC off), release longitudinal to driver.
-    # CS.cruiseState.enabled here is the stock ACC state (unlatched by selfdrived) — when
-    # it's off but OP is enabled, we're in MADS standby and must not command ACC.
-    # NOTE: gate on CC.enabled (stable), NOT CC.latActive (noisy — standstill/steerFault blips
-    # can drop latActive False for a frame, bypassing the gate → gas runs for that frame).
-    if self.mads_enabled and CC.enabled and not CS.cruiseState.enabled:
+    # MADS: force longitudinal off in standby. selfdrived computes madsStandby and publishes
+    # it via selfdriveState — no need to check cruiseState.enabled or mads_enabled here.
+    if self.sm['selfdriveState'].madsStandby:
       CC.longActive = False
 
     actuators = CC.actuators

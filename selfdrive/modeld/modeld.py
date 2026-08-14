@@ -870,6 +870,24 @@ class ModelState3SplitRKNN:
       ]
       self.on_policy_output = np.asarray(self._on_policy_py.inference(inputs=policy_inputs, data_type="float16")[0], dtype=np.float32).reshape(-1)
       self.off_policy_output = np.asarray(self._off_policy_py.inference(inputs=policy_inputs, data_type="float16")[0], dtype=np.float32).reshape(-1)
+
+      # --- DEBUG: vision→policy handoff tracing (opm10v3 all-zeros investigation) ---
+      # Logs every 50 frames (~2.5s at 20Hz). If any stage shows max=0.0, that's where the zeros start.
+      self._dbg_frame_count = getattr(self, '_dbg_frame_count', 0) + 1
+      if self._dbg_frame_count % 50 == 1:
+        _v_max = float(np.abs(self.vision_output).max())
+        _hs = vision_outputs_dict['hidden_state']
+        _hs_max = float(np.abs(_hs).max()) if _hs.size else 0.0
+        _fb_max = float(np.abs(self.numpy_inputs['features_buffer']).max())
+        _dp_max = float(np.abs(self.numpy_inputs['desire_pulse']).max())
+        _tc_max = float(np.abs(self.numpy_inputs['traffic_convention']).max())
+        _on_max = float(np.abs(self.on_policy_output).max()) if self.on_policy_output.size else 0.0
+        _off_max = float(np.abs(self.off_policy_output).max()) if self.off_policy_output.size else 0.0
+        _on_zero_pct = float(np.mean(self.on_policy_output == 0.0)) * 100 if self.on_policy_output.size else 0.0
+        _off_zero_pct = float(np.mean(self.off_policy_output == 0.0)) * 100 if self.off_policy_output.size else 0.0
+        cloudlog.warning("3split DBG f=%d: vis_out=%.6f hidden=%.6f fb=%.6f dp=%.1f tc=%.1f | on_pol=%.6f(zero%%=%.0f) off_pol=%.6f(zero%%=%.0f)",
+                         self._dbg_frame_count, _v_max, _hs_max, _fb_max, _dp_max, _tc_max,
+                         _on_max, _on_zero_pct, _off_max, _off_zero_pct)
     else:
       self.vision_output = self._rknn.run_vision(img_np, big_img_np).reshape(-1)
       vision_outputs_dict = self.parser.parse_vision_outputs(

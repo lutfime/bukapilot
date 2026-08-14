@@ -277,3 +277,35 @@ grep MADS_DEBUG /data/log/swaglog.* | python3 -c "import sys,json; [print(json.l
 # card crashes:
 grep '"daemon": "card"' /data/log/swaglog.* | grep -i error
 ```
+
+## MADS standby brake SOUND in silent mode (2026-08-14) — diagnosed, fix proposed
+
+**Symptom:** QuietMode (silent mode) ON. In MADS standby (MAIN armed, no SET), pressing brake
+still plays a sound. Engaged+brake is correctly silent. User intuition correct: Kommu added no
+MADS-aware sound handling.
+
+**Root cause (confirmed from drive 2026-08-14--00-45-49 selfdriveState alerts + soundd.py):**
+- Engaged + brake  → event `pedalPressed/userDisable` → AudibleAlert **disengage** (n=672)
+  → disengage is in the quiet-mode SUPPRESS list → silent. ✓
+- Standby + brake  → event `pedalPressed/noEntry`     → AudibleAlert **refuse** (n=5281)
+  → NoEntryAlert uses refuse; refuse is EXCLUDED from the quiet-mode gate
+    (`if quiet_mode and new_alert != AudibleAlert.refuse` in soundd.py update_alert) → ALWAYS plays.
+- QuietMode=1 verified set on device (/data/params/d/QuietMode).
+
+**Proposed fix (surgical, matches existing laneChangeBlocked pattern at soundd.py:138):**
+In `selfdrive/ui/soundd.py` `update_alert()`, the laneChangeBlocked line already suppresses one
+specific refuse-type in quiet mode. Add the analogous line for the pedal no-entry:
+```python
+  if quiet_mode and alert_type_name and "laneChangeBlocked" in alert_type_name:
+    return
++ if quiet_mode and alert_type_name and "pedalPressed/noEntry" in alert_type_name:
++   return
+```
+This suppresses ONLY the pedal no-entry refuse sound in silent mode. All other refuse sounds
+(AEB, wrongCarMode, system errors) still play. NOT yet applied — awaiting user OK.
+
+## MADS standby GAS still running — fix staged, NOT deployed (2026-08-14)
+controlsd.py longActive gate: `CC.latActive` (noisy) → `CC.enabled` (stable). Edit is in the
+working tree + result/deploy_mads_long_fix.sh ready. Safety verified (only fires in standby =
+enabled & !cruise_enabled; full ACC / disengage / no-MADS unchanged). Deployment deferred per
+user ("get back to this later").

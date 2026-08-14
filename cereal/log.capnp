@@ -840,6 +840,11 @@ struct SelfdriveState {
   experimentalMode @10 :Bool;
   personality @11 :LongitudinalPersonality;
 
+  # MADS: True when in standby lateral (MAIN armed, no SET, lat only, gas manual).
+  # Computed by selfdrived from lat_only state machine. controlsd reads this
+  # to force longActive=False in standby.
+  madsStandby @13 :Bool;
+
   enum OpenpilotState @0xdbe58b96d2d1ac61 {
     disabled @0;
     preEnabled @1;

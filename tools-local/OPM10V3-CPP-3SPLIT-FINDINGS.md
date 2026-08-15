@@ -1,6 +1,6 @@
 # OPM10V3 C++ 3-Split Runner — Bug Findings & Reproduction (HANDOFF)
 
-> **⛔ CURRENT STATUS (2026-08-15): opm10v3 is NOT drivable. Use wmiv12 or default 0.10.3.**
+> **⛔ CURRENT STATUS (2026-08-16): opm10v3 is NOT drivable. Use wmiv12 or default 0.10.3.**
 >
 > Everything tried so far:
 > - **fp16 (erf/sigmoid/Clip/opt0/nomaskinf)**: RUNS and produces real output, but overflows
@@ -10,10 +10,13 @@
 >   on this setup. The earlier "0% overflow" claims were meaningless — zeros never overflow.
 > - **What works**: default 0.10.3 (confirmed), the C++ Fix E runner, parse fixes, 20+ Hz.
 >
-> **Active leads (see "NEXT STEPS" section at bottom):**
-> 1. **librknnrt version mismatch** — never checked; could explain BOTH overflow and INT8 zeros
-> 2. **Transient accumulation overflow hypothesis** + weight-scaled S=8 models (built, untested)
-> 3. **Diagnostic models** with exposed intermediate outputs (built, untested on device)
+> **ON-DEVICE RESULTS 2026-08-15 (all three research leads tested — see bottom section):**
+> 1. **librknnrt version: RULED OUT** — device runtime is 2.3.2, identical to the toolkit.
+> 2. **S=8 weight-scaled models: REFUTED** — 6×/2.5× MORE inf than erf on real features. Never drive.
+> 3. **Diag models: method INVALID** — exposing intermediates changes the numerics (see below).
+>
+> Remaining paths: rknn_server per-layer accuracy_analysis (vendor tool), comma's official 0.11
+> export, or accept default/wmiv12. Device left on wmiv12, erf/base policy files restored.
 
 ## Timeline of failures (each superseded — kept for the record)
 
@@ -791,3 +794,61 @@ earlier swap, on_pol=0 is expected — restore erf/scaled files first.)
 3. **Restore correct policy files** (erf or scaled — device may still have int8_v2 bytes swapped in)
 4. **Weight-scaled models drive test** — desiredCurvature non-zero %, no phantom brake
 5. **If still failing**: adb + rknn_server setup for remote per-layer accuracy_analysis
+
+---
+
+## 🔬 ON-DEVICE TEST RESULTS (2026-08-15 — all three leads resolved, all NEGATIVE)
+
+Setup: pushed diag + scaled models + scripts to device (both /data/openpilot and
+/data/safe_staging/merged), device on wmiv12 throughout, erf/base policy names restored
+to true repo bytes (md5 on=07895421, off=86177c67). Test scripts committed alongside
+this doc: `test_scaled_vs_erf.py`, `test_scaled_real_features.py`, `test_diag_real_features.py`.
+
+### Lead 1 — librknnrt version: RULED OUT
+`/usr/lib/librknnrt.so` = **2.3.2 (429f97ae6b@2025-04-09)** — identical to the conversion
+toolkit (2.3.2). No runtime/model-format mismatch. The simulator-vs-NPU gap is genuine
+hardware behavior, not a version problem.
+
+### Lead 2 — S=8 weight-scaled models: REFUTED (do NOT drive)
+Real-distribution features (vision hidden_states from noisy images, production
+construction: output[117:629], 25-stack; range [-1.55, 1.47], std 0.35 — matches real
+drive stats). 60 windows, rknnlite, per model:
+
+| head | erf inf | scaled(S=8) inf |
+|------|---------|-----------------|
+| on_policy | 8.3% | **51.7%** |
+| off_policy | 33.3% | **81.7%** |
+
+On both-finite frames erf vs scaled outputs diverge by median 115 / 206, max ~2e4 / 1e3 —
+NOT the "bit-exact" match claimed off-device (that verification was simulator-only;
+**the simulator-green / device-fail trap again**). Scaling makes overflow WORSE, not better.
+The accumulation-overflow mechanism as modeled (partial sums in scaled MatMuls) is not
+what's happening, or S=8 introduces its own fp16 damage (e.g. the Mul(8) un-scale, or
+NPU fusion interacting with the scaled weights). Either way: **scaled models are dead.**
+A larger S would not change this verdict — the outputs already diverge from ground truth.
+
+Also: synthetic random-walk features (any magnitude, even std 0.1 "tame") send ALL
+variants (erf AND scaled) to 100% inf — synthetic tests remain useless as a gate
+(`test_scaled_vs_erf.py` output). Only real-vision-derived features discriminate.
+
+### Lead 3 — diagnostic models: METHOD INVALID (results are an artifact)
+Diag models expose every intermediate as an output (113 on / 194 off). With REAL features:
+100/113 and 181/194 outputs go inf, worst layers ~100% of frames, first inf at output[0].
+BUT the plain erf model on the SAME inputs is only 8.3% inf (final output). Exposing
+intermediates forces the NPU to materialize fp16 tensors that the fused production graph
+(opt-level-3 fusion) never materializes — the diag model computes a DIFFERENT, worse
+network. **Diag models cannot localize production overflow.** (Synthetic-feature diag
+runs are doubly invalid.) rknn_server `accuracy_analysis` has the same
+materialization caveat — treat its per-layer output with suspicion.
+
+### Where this leaves opm10v3
+- fp16: overflow 8-33% on real features (confirmed again, matches drive-era numbers)
+- INT8: all-zeros on NPU; C++ can't feed int8 inputs
+- S=8 scaling: worse than baseline (this session)
+- Per-layer diagnostics: not representative of production numerics
+- **Remaining options**: comma's official 0.11 policy export (if obtainable — tests whether
+  the community weights are the problem); vendor rknn_server toolchain (adb, needs setup);
+  or stop here — default 0.10.3 / wmiv12 remain the only confirmed-drivable models.
+- Device state after tests: wmiv12 selected, erf/base restored under standard names,
+  scaled+diag models present under their own names (not loaded by modeld), service healthy
+  (clean overnight reboot, normal daemon bring-up, 37°C).

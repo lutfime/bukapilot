@@ -249,11 +249,13 @@ class SelfdriveD:
         self.lat_only_unavailable_count = 0
 
       # Disable on rising edge of accelerator or brake. Also disable on brake when speed > 0
-      # MADS: gas is manual in standby (lat_only AND not cruise_enabled). During full ACC,
-      # gas disengages normally (lat_only is True during ACC but cruise_enabled is also True).
+      # MADS: in standby-lateral, gas is manual and must NOT disengage. Brake always disengages.
+      # NOTE (user decision 2026-08-14): gas must NEVER disengage while MADS is on — in full ACC
+      # too, not just standby. lat_only stays True during full ACC (cancel→standby transition),
+      # so gating on lat_only alone keeps gas as a pure override in BOTH states. Reverted the
+      # other agent's mads_standby_gas_block (which re-enabled gas-disengage during full ACC).
       gas_disengage = CS.gasPressed and not self.CS_prev.gasPressed and self.disengage_on_accelerator
-      mads_standby_gas_block = self.lat_only and not CS.cruiseState.enabled
-      if (gas_disengage and not mads_standby_gas_block) or \
+      if (gas_disengage and not self.lat_only) or \
         (CS.brakePressed and (not self.CS_prev.brakePressed or not CS.standstill)) or \
         (CS.regenBraking and (not self.CS_prev.regenBraking or not CS.standstill)):
         self.events.add(EventName.pedalPressed)

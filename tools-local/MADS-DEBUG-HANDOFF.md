@@ -287,17 +287,21 @@ Bug #3 HOLD fixed **gas disengaging OP**, not **OP commanding long**. Different 
 
 `lat_only` is also **not published** — controlsd cannot read it today.
 
-### Provisional one-liner (in tree) — NOT final
+### Provisional one-liner (in tree) — still not “final SM”, but enabled noise risk is lower
 ```python
 if mads and CC.enabled and not CS.cruiseState.enabled:
     CC.longActive = False
 ```
 - Fixes standby long when `latActive` drops (good for Bug #4 symptom).
-- **Risk:** if `cruiseState.enabled` flickers False during real SET/ACC, long drops briefly
-  (jerk / ACC release). While *moving*, old `latActive && !cruise_en` gate already had that
-  risk; new gate also applies at **standstill during ACC**.
-- **Unproven on car:** latest bit dump had **no** `cruise_en=True` (no SET road data).
-- User: leave **no room for dangerous error** → do **not** ship one-liner as final safety story.
+- **`cruiseState.enabled` noise (checked 2026-08-14 from existing rlogs):** **NOT noisy
+  during full ACC.** Scanned 71 segments under `result/drives/` (+ device-logs); 41 had
+  sustained `enabled=True` ≥5s. **0** short True runs (<5 frames), **0** False 1–10 frame
+  gaps between True. Many ~60s segments are 100% True with 0 transitions (e.g. Aug 9/10).
+  Aug 14 `00-45-49` has multi‑10s True runs with only engage/disengage-scale flips.
+  (Swaglog MADS_* never showed `cruise_en=True` — those drives were standby-only.)
+- **`available` is the noisy one** (especially Aug 14 MADS) — separate from `enabled`.
+- Still prefer explicit Off/Standby/ACC for clarity; one-liner is much safer than feared
+  *if* it only keys off `enabled`. User still asked not to ship casually — confirm before deploy.
 
 ### Required design: Off / Standby / ACC (not just `lat_only`)
 Goal modes:

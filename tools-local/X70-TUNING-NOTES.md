@@ -292,3 +292,81 @@ kiV=[0.001,0.005,0.03,0.4,0.5], **kf=0.00015**, STEER_DELTA=10/10, LAT_SMOOTH=0.
   the known hard problem — model desired-path noise at low speed, not the PID. No longer causes
   releases, so it's a feel issue, not a safety issue.
 - VERDICT: safe + more anticipatory than before. User subjectively: "feels ok".
+
+## Overcorner at apex — analysis + upstream LAT_SMOOTH check (2026-08-14, same drive)
+
+**Symptom (user):** sometimes feels slightly "overcorner" — car turns a hair more than the path
+at corners. Mild; "any improvement is good".
+
+**Analysis (drive 2026-08-14--00-45-49, wmiv12, PID, kf=0.00015, LAT_SMOOTH=0.5):** low-speed
+residential drive (engaged vEgo p50=7.7 m/s, gentle corners, desired lat-accel p50=0.62 m/s²).
+- f-term is **78–98% of steering at corners** (kf boost worked; feedforward dominates).
+- Apex **overshoot** (peak|actual|/peak|desired|): p50≈1.02, p90≈1.20; ~40% of corner peaks
+  +10–20% over. Mild and occasional.
+- Overall the car still tracks **under** desired ~70% of corner frames (actuator lag) — so it is
+  NOT globally over-gained, just peaky at apex.
+- **Corner sustain time (desired within 70% of its peak): p50 ≈ 1.1 s, p90 ≈ 1.9 s** → corners
+  are SUSTAINED apexes, not transient spikes.
+
+### LAT_SMOOTH: what comma/stock uses (user asked) — already 5x upstream
+| source | LAT_SMOOTH_SECONDS |
+|--------|--------------------|
+| Comma upstream **0.11** model | **0.1** (per bukapilot commit c9410a9: "upstream 0.11 value") |
+| Bukapilot **stock** (0.10/legacy path) | **0.0** ("stock staging value") |
+| **This car** (wmiv12/default, 0.10 path) | **0.5** |
+
+LAT_SMOOTH_SECONDS is a real comma constant (low-pass filter on desired_curvature,
+drive_helpers.smooth_value, alpha=1-exp(-dt/tau)); NOT Kommu-invented. Applies ONLY to plan-based
+models (wmiv12/default — confirmed their runner has no action head → takes the LAT_SMOOTH_SECONDS
+branch). The 0.11 action-head path uses a separate _011 constant. **We are already at 5x the
+upstream 0.11 value; stock is 0.0.**
+
+### CORRECTION — do NOT raise LAT_SMOOTH for apex overcorner
+Earlier suggested LAT_SMOOTH 0.5→0.65. **Wrong.** LAT_SMOOTH only suppresses transients shorter
+than ~its tau; corners here are sustained ~1.1s, already settled through the 0.5s filter, so more
+smoothing does NOT reduce apex overcorner. It would only push further from stock. **Leave
+LAT_SMOOTH at 0.5** (it does its real job: taming low-speed wobble / model path-jumps).
+
+### Recommendation: small kf trim (the on-target lever)
+Overcorner is feedforward slightly hot at sustained apexes (f = 78–98%). Lever is **kf**, not
+LAT_SMOOTH.
+- **kf 0.00015 → ~0.00013** (≈13% less): softens apex turn-in where f dominates; minimal understeer
+  return (kf was raised for understeer, so go gentle).
+- Conservative first step: **0.00014**.
+- Only if LAT_SMOOTH isn't doing enough for *transient* wobble (separate issue) would you touch it.
+
+NOTE: confirm exact on-device kf before changing (user may have retuned since). Value-only change,
+user tunes on device; no code.
+
+## STEER_DELTA — exact fault mechanism (2026-08-14, simulated on drive 00-45-49)
+
+**Mechanism (corrected):** the fault is NOT "EPS physically can't follow" — the EPS slewed up to
+173 units/frame today when demanded (p95~5 only because it usually cruises). It is a per-frame
+command-step plausibility check in the EPS: a LKAS request that jumps more than T units in one
+frame gets rejected -> steering released.
+
+**What the EPS receives per config (simulation, rate-limiting today's raw PID desired):**
+- 10/10  -> max step exactly 10.0 (hard cap) -> provably cannot violate -> zero faults (matches drive)
+- 45/15  -> UP steps up to 45, DOWN capped 15
+- 45/18  -> UP steps up to 45, DOWN capped 18
+
+**User fault ladder -> brackets the tolerances:**
+| config | observed | explanation |
+|---|---|---|
+| 45/18 | fault almost IMMEDIATELY | DOWN=18 sends 16-18-unit falls in ordinary driving (desired DOWN p95=16) -> first violating step within ~1 min of steering (sim: t=67s = first real steering) |
+| 45/15 | fault usually AT/AFTER CORNER | DOWN=15 is just under tolerance -> normal driving survives; remaining violations are UP=45 corner-ENTRY jumps (rising steps p99=28, peak 45+) |
+| 10/10 | ZERO faults | nothing sent exceeds 10 |
+
+**Brackets:** DOWN tolerance 15 < T <= 18. UP tolerance 10 < T < 45 (45 faults at corner entries).
+Exact values only pinnable by more A/B (e.g. 15/10) — pointless: 10/10 costs ~10% of down-transition
+clipping (imperceptible) and is proven fault-free.
+
+**Desired step stats (why caps matter):** PID desired steps p90~10, p95~16, p99~30+, peak 119/frame
+both directions -> caps alone decide what the EPS sees.
+
+**STEER_MAX implication:** releases were step-caused (DELTA), never magnitude. Raising 550->580 does
+NOT reintroduce them (10/10 unchanged). Only remaining 580 risk = sustained near-max authority drop
+(wobble). Today @550: longest near-limit run 3.3s, ~4% engaged frames at limit, zero faults.
+
+**Delays reconfirmed:** steer 0.17 (cmd->EPS xcorr p50=144ms, IQR 87-194) keep. Long 0.45 measured
+0.77s but n=6 windows (city, longActive 15%) -> inconclusive, re-measure on highway.

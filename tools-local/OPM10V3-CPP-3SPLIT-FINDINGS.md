@@ -1,25 +1,32 @@
 # OPM10V3 C++ 3-Split Runner — Bug Findings & Reproduction (HANDOFF)
 
-> **✅ SOLUTION FOUND (2026-08-12): INT8 policy heads + C++ vision = 29.3 Hz, 0% overflow.**
-> See SOLUTION section below. All prior blockers resolved: parse crash, C++ inf (Fix E), fp16 overflow.
-> **Drive test pending** (device configured, not yet driven).
+> **⛔ CURRENT STATUS (2026-08-15): opm10v3 is NOT drivable. Use wmiv12 or default 0.10.3.**
 >
-> **⚠️ UPDATE 2026-08-13: INT8 MODELS ARE BROKEN — they output ALL ZEROS.** The "0% overflow" was
-> misleading — I only checked `np.isfinite(output)`, not whether output was non-zero/sane. Zeros are
-> always finite and never overflow. On the drive (2026-08-13): desiredCurvature = exactly 0.000000
-> across ALL frames → no steering at all. **The INT8 conversion is broken (produces zeros for all
-> inputs).** The 29.3 Hz bench was real but used zeros input (both INT8 and fp16 produce zeros for
-> zeros input — the comparison was meaningless). LESSON: always check output MAGNITUDE not just
-> finiteness. opm10v3 is back to fp16 erf (overflow problem). User switched to WMI for driving.
+> Everything tried so far:
+> - **fp16 (erf/sigmoid/Clip/opt0/nomaskinf)**: RUNS and produces real output, but overflows
+>   9-26% of frames → phantom-brake (off_policy lead inf → collision-avoidance braking). Undrivable.
+> - **INT8 v1 + v2**: outputs ALL ZEROS on real NPU (desiredCurvature = 0.000000 on drive).
+>   C++ runner also crashes on INT8 (rknn_inputs_set can't convert fp16→int8). INT8 is a dead end
+>   on this setup. The earlier "0% overflow" claims were meaningless — zeros never overflow.
+> - **What works**: default 0.10.3 (confirmed), the C++ Fix E runner, parse fixes, 20+ Hz.
+>
+> **Active leads (see "NEXT STEPS" section at bottom):**
+> 1. **librknnrt version mismatch** — never checked; could explain BOTH overflow and INT8 zeros
+> 2. **Transient accumulation overflow hypothesis** + weight-scaled S=8 models (built, untested)
+> 3. **Diagnostic models** with exposed intermediate outputs (built, untested on device)
 
-> **⚠️ UPDATE 2026-08-13: INT8 MODELS ARE BROKEN — they output ALL ZEROS.**
-> The "0% overflow" was misleading — only checked `np.isfinite(output)`, not whether output was
-> non-zero/sane. Zeros are always finite and never overflow. On the drive (2026-08-13):
-> `desiredCurvature = exactly 0.000000` across ALL frames → **no steering at all**.
-> The INT8 conversion is broken (produces zeros for all inputs). Likely cause: bad calibration
-> data (synthetic random features, not real driving data). INT8 quantization needs real activation
-> ranges to compute correct scales — synthetic data produced wrong scales → everything maps to zero.
-> **INT8 is NOT a working solution.** OPM10V3 remains undrivable.
+## Timeline of failures (each superseded — kept for the record)
+
+> **⚠️ 2026-08-13: INT8 v1 BROKEN — outputs ALL ZEROS.** Only checked `np.isfinite(output)`, not
+> non-zero. Zeros are always finite. On drive 2026-08-13: desiredCurvature = 0.000000 across ALL
+> frames → no steering. User switched to WMI for driving.
+
+> **⚠️ 2026-08-14: INT8 v2 ALSO ALL ZEROS on real NPU** (drive 2026-08-14--01-02-21, car-park).
+> v2 was "simulator-verified non-zero" — but the simulator has NEVER matched NPU behavior.
+> modeld loaded cleanly, inference ran (37ms, 0% frame drops), but desiredCurvature 0% non-zero,
+> lead detection 0% (radar 86%). Lateral AND longitudinal dead. Device files at the time: erf/int8_v2/base
+> all contained int8_v2 bytes (deliberate swap from earlier testing). INT8 confirmed dead end.
+> Details in "ON-ROAD TEST FAILED" section below.
 
 > **STATUS SUMMARY:** opm10v3 went through 5 issues, all now resolved:
 > 1. C++ on_policy inf → Fix E (per-input pass_through by native fmt).
@@ -708,3 +715,79 @@ The vision→policy boundary (C++ → Python) is the most likely place real fram
   = opm10v3 on device — **change it back before driving**, or lateral will be dead.
 - Re-verify any future opm10v3 fix against a REAL device drive (desiredCurvature non-zero %), NOT
   just the simulator. The simulator-green / device-zero gap is the recurring trap here.
+
+---
+
+## 🔬 RESEARCH & NEXT STEPS (2026-08-15, prepared off-device)
+
+### Lead 1 — librknnrt version mismatch (CHECK FIRST, 30 seconds)
+
+We convert with **rknn-toolkit2 2.3.2** but have NEVER checked the device's runtime version.
+[GitHub issue #198](https://github.com/rockchip-linux/rknn-toolkit/issues/198) ("works in
+simulator, fails on board") cites toolkit-vs-board runtime mismatch as a root cause of exactly
+our symptom pattern. A mismatch would explain BOTH failures at once:
+- fp16 overflow on device but 0% in simulator (different runtime fp16 behavior)
+- INT8 v2 non-zero in 2.3.2 simulator but all-zeros on device (model format mismatch)
+
+**Check when device is reachable:**
+```bash
+strings /usr/lib/librknnrt.so | grep -iE "librknnrt|version" | head -5
+# also check where the runtime is loaded from:
+ls -la /usr/lib/librknnrt.so /data/openpilot/third_party/rknpu/aarch64/librknnrt.so 2>/dev/null
+```
+If version ≠ 2.3.2-matching: either update device librknnrt (risky, affects default/WMI —
+test thoroughly) or convert with the matching older toolkit version.
+
+### Lead 2 — transient accumulation overflow + weight-scaled models (BUILT, commit ce8b96301)
+
+**Hypothesis (fits ALL evidence):** the NPU fp16 accumulator overflows MID-DOT-PRODUCT —
+partial sums transiently exceed 65504 inside MatMul accumulation (12800-element dot products
+with cancellation) before the final value lands at ~50-280. Explains:
+- nondeterministic 2-24% rate (NPU parallel reduction scheduling varies)
+- CPU/simulator never reproduces (different accumulation)
+- final activations always small in every diagnostic (overflow is mid-computation)
+- 32× amplified inputs stay clean on CPU (it's accumulation path, not input magnitude)
+
+**Fix built:** `tools-local/scale_matmul_weights.py` — divide all linear weights by 8, insert
+Mul(8) after each MatMul/Gemm (Gemm biases scaled too: (A@(W/8) + B/8)×8 = A@W + B).
+Partial sums shrink 8×; un-scale applies AFTER accumulation. Power-of-2 = bit-exact in fp16.
+**Verified:** output matches original (median rel diff 0.00, max = 1 fp16 ULP rounding noise).
+**Files:** `driving_{on,off}_policy_opm10v3_scaled.rknn` (fp16, erf, S=8).
+If S=8 insufficient: re-run with shift=4 (S=16) — one-number change.
+
+**Evidence for the mechanism (stress test):** amplified-input sweep showed final activations
+max 1611 (on_policy) / 618 (off_policy) even at 32× input — far below 65504 — yet NPU overflows
+at 1× input. Overflow must be inside accumulation, not at layer outputs.
+
+### Lead 3 — diagnostic models for on-device layer finding (BUILT, commit 6903117b7)
+
+`driving_{on,off}_policy_opm10v3_diag.rknn` — every intermediate layer exposed as output
+(140/257 outputs). Run `tools-local/test_diag_overflow.py` on device → lists exactly which
+outputs contain inf on the REAL NPU. Note: rknnlite returns outputs unnamed (by index; last =
+final output). If overflow layers are the big linears → confirms accumulation theory.
+
+### Debug logging already in modeld.py (commit 4d45e06d7)
+
+`3split DBG` log line every 50 frames traces the handoff: vis_out → hidden → fb → on_pol/off_pol.
+Reads: vis_out=0 → C++ vision broken; hidden=0 → slice bug; fb=0 → queue bug; fb>0 but on_pol=0 →
+rknnlite inference broken. (Note: if device policy files still contain int8_v2 bytes from the
+earlier swap, on_pol=0 is expected — restore erf/scaled files first.)
+
+### Research references
+
+- [SHARD — ViT on RK3588 numerical failures](https://amohan.dev/blog/2025/shard-optimizing-vision-transformers-edge-npu/):
+  same class of problem; they probed hardware limits with synthetic ONNX graphs ON DEVICE
+  (no off-device method); fix = CPU pre/post-scale around NPU (linear-only IO sandwich —
+  our per-layer weight scaling is the nonlinear-net equivalent).
+- [rknn-toolkit2 remote target inference](https://github.com/rockchip-linux/rknn-toolkit2):
+  PC toolkit + adb + rknn_server on device → `accuracy_analysis()` runs on REAL NPU with
+  per-layer results on the PC. The official debugging path we haven't used yet.
+- [GitHub #198 — simulator vs board divergence](https://github.com/rockchip-linux/rknn-toolkit/issues/198)
+
+### Test order when device is reachable
+
+1. **librknnrt version check** (30s) — cheapest, could explain everything
+2. **Diagnostic models on device** (2 min) — find real overflow layers
+3. **Restore correct policy files** (erf or scaled — device may still have int8_v2 bytes swapped in)
+4. **Weight-scaled models drive test** — desiredCurvature non-zero %, no phantom brake
+5. **If still failing**: adb + rknn_server setup for remote per-layer accuracy_analysis

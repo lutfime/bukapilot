@@ -10,13 +10,12 @@
 >   on this setup. The earlier "0% overflow" claims were meaningless — zeros never overflow.
 > - **What works**: default 0.10.3 (confirmed), the C++ Fix E runner, parse fixes, 20+ Hz.
 >
-> **ON-DEVICE RESULTS 2026-08-15 (all three research leads tested — see bottom section):**
+> **ON-DEVICE RESULTS 2026-08-15/16 (all research leads tested — see bottom section):**
 > 1. **librknnrt version: RULED OUT** — device runtime is 2.3.2, identical to the toolkit.
 > 2. **S=8 weight-scaled models: REFUTED** — 6×/2.5× MORE inf than erf on real features. Never drive.
 > 3. **Diag models: method INVALID** — exposing intermediates changes the numerics (see below).
->
-> Remaining paths: rknn_server per-layer accuracy_analysis (vendor tool), comma's official 0.11
-> export, or accept default/wmiv12. Device left on wmiv12, erf/base policy files restored.
+> 4. **tanh + erf-split Gelu rewrites: REFUTED** — both worse than erf (up to 100% inf).
+>    Every graph-rewrite theory is now eliminated; stop attempting them.
 
 ## Timeline of failures (each superseded — kept for the record)
 
@@ -841,14 +840,36 @@ network. **Diag models cannot localize production overflow.** (Synthetic-feature
 runs are doubly invalid.) rknn_server `accuracy_analysis` has the same
 materialization caveat — treat its per-layer output with suspicion.
 
+### Lead 4 — Gelu-structure variants (tanh + erf-split, commit 17dc626): REFUTED (2026-08-16)
+Same real-features harness, same seed as Lead 2 (erf baseline re-measured alongside —
+it drifts run-to-run with the known NPU nondeterminism: 8.3→15.0% on, 33.3→41.7% off,
+but the ordering below is unambiguous):
+
+| head | erf | tanh (GPT-2 approx) | erfsplit (sum form) |
+|------|-----|---------------------|---------------------|
+| on_policy inf | 15.0% | 35.0% | 51.7% |
+| off_policy inf | 41.7% | 76.7% | **100%** |
+
+- tanh's finite-frame outputs cap at ~188 (on) / 1203 (off) vs erf's 4e4/1.9e4 — its x³
+  intermediate overflows fp16 for |x|>40 (x·x·x > 65504), so it CANNOT be safe on a net
+  whose activations reach those magnitudes.
+- Both variants also diverge from erf on both-finite frames (median 4.6-177, max ~1e4) —
+  different-net behavior like S=8, not a clean Gelu substitution.
+
+**With this, every overflow theory is eliminated**: sigmoid-Gelu, erf product-form,
+erf sum-form, tanh, ±100 Clip, opt_level 0, INT8 (zeros), S=8 weight scaling, diag
+localization. The overflow is NOT in the Gelu op — it is these community weights in fp16
+on the RK3588 NPU, full stop. No further graph-rewrite attempts are warranted.
+
 ### Where this leaves opm10v3
 - fp16: overflow 8-33% on real features (confirmed again, matches drive-era numbers)
 - INT8: all-zeros on NPU; C++ can't feed int8 inputs
 - S=8 scaling: worse than baseline (this session)
+- tanh / erf-split Gelu rewrites: worse than baseline (this session)
 - Per-layer diagnostics: not representative of production numerics
 - **Remaining options**: comma's official 0.11 policy export (if obtainable — tests whether
   the community weights are the problem); vendor rknn_server toolchain (adb, needs setup);
   or stop here — default 0.10.3 / wmiv12 remain the only confirmed-drivable models.
 - Device state after tests: wmiv12 selected, erf/base restored under standard names,
-  scaled+diag models present under their own names (not loaded by modeld), service healthy
-  (clean overnight reboot, normal daemon bring-up, 37°C).
+  scaled/diag/tanh/erfsplit models present under their own names (not loaded by modeld),
+  service healthy (clean overnight reboot, normal daemon bring-up, 37°C).

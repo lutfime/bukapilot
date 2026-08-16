@@ -1,0 +1,422 @@
+{
+  "route": "2026-08-09--05-45-16",
+  "segments": [
+    15,
+    18,
+    19,
+    26
+  ],
+  "durationMin": 4.0,
+  "sampleCount": 24014,
+  "car": {
+    "carFingerprint": "PROTON_X70",
+    "steerRatio": 20.0,
+    "wheelbase": 2.6700000762939453,
+    "steerActuatorDelay": 0.17000000178813934,
+    "lateralController": "pid",
+    "pid": {
+      "kpBP": [
+        0.0,
+        5.0,
+        15.0,
+        25.0,
+        35.0
+      ],
+      "kpV": [
+        0.0005000000237487257,
+        0.019999999552965164,
+        0.04500000178813934,
+        0.10000000149011612,
+        0.17000000178813934
+      ],
+      "kiBP": [
+        0.0,
+        5.0,
+        15.0,
+        25.0,
+        35.0
+      ],
+      "kiV": [
+        0.0010000000474974513,
+        0.009999999776482582,
+        0.09000000357627869,
+        0.4000000059604645,
+        0.5
+      ],
+      "kf": 2.499999936844688e-05
+    }
+  },
+  "eligibleSampleCount": 20528,
+  "events": {
+    "understeer": {
+      "total": 46,
+      "bySpeedBand": {
+        "fast": {
+          "count": 24,
+          "meanSeverity": 0.331,
+          "maxSeverity": 0.556,
+          "worst": {
+            "startIdx": 4039,
+            "endIdx": 4043,
+            "tStart": 40.45,
+            "segment": 15,
+            "peakScore": 0.556,
+            "durationS": 0.04,
+            "speedBand": "fast",
+            "direction": "left",
+            "meanSpeedKph": 64.2
+          }
+        },
+        "highway": {
+          "count": 22,
+          "meanSeverity": 0.336,
+          "maxSeverity": 0.654,
+          "worst": {
+            "startIdx": 8618,
+            "endIdx": 8632,
+            "tStart": 26.19,
+            "segment": 18,
+            "peakScore": 0.654,
+            "durationS": 0.14,
+            "speedBand": "highway",
+            "direction": "left",
+            "meanSpeedKph": 93.0
+          }
+        }
+      }
+    },
+    "oversteer": {
+      "total": 9,
+      "bySpeedBand": {
+        "fast": {
+          "count": 6,
+          "meanSeverity": 0.313,
+          "maxSeverity": 0.478,
+          "worst": {
+            "startIdx": 6109,
+            "endIdx": 6117,
+            "tStart": 1.1,
+            "segment": 18,
+            "peakScore": 0.478,
+            "durationS": 0.08,
+            "speedBand": "fast",
+            "direction": "left",
+            "meanSpeedKph": 85.6
+          }
+        },
+        "highway": {
+          "count": 3,
+          "meanSeverity": 0.258,
+          "maxSeverity": 0.293,
+          "worst": {
+            "startIdx": 13601,
+            "endIdx": 13607,
+            "tStart": 16.02,
+            "segment": 19,
+            "peakScore": 0.293,
+            "durationS": 0.06,
+            "speedBand": "highway",
+            "direction": "right",
+            "meanSpeedKph": 94.8
+          }
+        }
+      }
+    },
+    "late_turn_in": {
+      "total": 103,
+      "bySpeedBand": {
+        "fast": {
+          "count": 49,
+          "meanSeverity": 0.464,
+          "maxSeverity": 1.291,
+          "worst": {
+            "startIdx": 3386,
+            "endIdx": 3519,
+            "tStart": 33.92,
+            "segment": 15,
+            "peakScore": 1.291,
+            "durationS": 1.33,
+            "speedBand": "fast",
+            "direction": "left",
+            "meanSpeedKph": 69.2
+          }
+        },
+        "highway": {
+          "count": 54,
+          "meanSeverity": 0.531,
+          "maxSeverity": 0.893,
+          "worst": {
+            "startIdx": 8069,
+            "endIdx": 8128,
+            "tStart": 20.7,
+            "segment": 18,
+            "peakScore": 0.893,
+            "durationS": 0.59,
+            "speedBand": "highway",
+            "direction": "right",
+            "meanSpeedKph": 95.8
+          }
+        }
+      }
+    },
+    "early_turn_in": {
+      "total": 1,
+      "bySpeedBand": {
+        "highway": {
+          "count": 1,
+          "meanSeverity": 0.43,
+          "maxSeverity": 0.43,
+          "worst": {
+            "startIdx": 11131,
+            "endIdx": 11135,
+            "tStart": 51.32,
+            "segment": 18,
+            "peakScore": 0.43,
+            "durationS": 0.04,
+            "speedBand": "highway",
+            "direction": "left",
+            "meanSpeedKph": 97.1
+          }
+        }
+      }
+    },
+    "unwind_too_slow": {
+      "total": 70,
+      "bySpeedBand": {
+        "fast": {
+          "count": 41,
+          "meanSeverity": 0.281,
+          "maxSeverity": 0.721,
+          "worst": {
+            "startIdx": 4243,
+            "endIdx": 4420,
+            "tStart": 42.49,
+            "segment": 15,
+            "peakScore": 0.721,
+            "durationS": 1.77,
+            "speedBand": "fast",
+            "direction": "left",
+            "meanSpeedKph": 61.3
+          }
+        },
+        "highway": {
+          "count": 29,
+          "meanSeverity": 0.282,
+          "maxSeverity": 0.464,
+          "worst": {
+            "startIdx": 11093,
+            "endIdx": 11121,
+            "tStart": 50.94,
+            "segment": 18,
+            "peakScore": 0.464,
+            "durationS": 0.28,
+            "speedBand": "highway",
+            "direction": "left",
+            "meanSpeedKph": 97.1
+          }
+        }
+      }
+    },
+    "unwind_too_fast": {
+      "total": 49,
+      "bySpeedBand": {
+        "fast": {
+          "count": 23,
+          "meanSeverity": 0.275,
+          "maxSeverity": 0.558,
+          "worst": {
+            "startIdx": 4044,
+            "endIdx": 4048,
+            "tStart": 40.5,
+            "segment": 15,
+            "peakScore": 0.558,
+            "durationS": 0.04,
+            "speedBand": "fast",
+            "direction": "left",
+            "meanSpeedKph": 64.3
+          }
+        },
+        "highway": {
+          "count": 24,
+          "meanSeverity": 0.324,
+          "maxSeverity": 0.673,
+          "worst": {
+            "startIdx": 8288,
+            "endIdx": 8308,
+            "tStart": 22.89,
+            "segment": 18,
+            "peakScore": 0.673,
+            "durationS": 0.2,
+            "speedBand": "highway",
+            "direction": "right",
+            "meanSpeedKph": 94.9
+          }
+        },
+        "mid": {
+          "count": 2,
+          "meanSeverity": 0.298,
+          "maxSeverity": 0.384,
+          "worst": {
+            "startIdx": 3,
+            "endIdx": 9,
+            "tStart": 0.09,
+            "segment": 15,
+            "peakScore": 0.384,
+            "durationS": 0.06,
+            "speedBand": "mid",
+            "direction": "left",
+            "meanSpeedKph": 50.6
+          }
+        }
+      }
+    },
+    "saturation_limited": {
+      "total": 3,
+      "bySpeedBand": {
+        "fast": {
+          "count": 3,
+          "meanSeverity": 1.0,
+          "maxSeverity": 1.0,
+          "worst": {
+            "startIdx": 3566,
+            "endIdx": 3577,
+            "tStart": 35.72,
+            "segment": 15,
+            "peakScore": 1.0,
+            "durationS": 0.11,
+            "speedBand": "fast",
+            "direction": "left",
+            "meanSpeedKph": 68.9
+          }
+        }
+      }
+    },
+    "center_chatter": {
+      "total": 109,
+      "bySpeedBand": {
+        "fast": {
+          "count": 72,
+          "meanSeverity": 1.473,
+          "maxSeverity": 1.5,
+          "worst": {
+            "tStart": 7.06,
+            "segment": 15,
+            "peakScore": 1.5,
+            "durationS": 0.39,
+            "speedBand": "fast",
+            "direction": "center",
+            "meanSpeedKph": 58.1,
+            "angleP2P": 1.169,
+            "errorP2P": 0.132,
+            "outputP2P": 0.124,
+            "reversals": 24
+          }
+        },
+        "highway": {
+          "count": 35,
+          "meanSeverity": 1.488,
+          "maxSeverity": 1.5,
+          "worst": {
+            "tStart": 10.01,
+            "segment": 18,
+            "peakScore": 1.5,
+            "durationS": 0.39,
+            "speedBand": "highway",
+            "direction": "center",
+            "meanSpeedKph": 90.7,
+            "angleP2P": 0.397,
+            "errorP2P": 0.412,
+            "outputP2P": 0.1392,
+            "reversals": 21
+          }
+        },
+        "mid": {
+          "count": 2,
+          "meanSeverity": 1.5,
+          "maxSeverity": 1.5,
+          "worst": {
+            "tStart": 0.76,
+            "segment": 15,
+            "peakScore": 1.5,
+            "durationS": 0.39,
+            "speedBand": "mid",
+            "direction": "center",
+            "meanSpeedKph": 51.8,
+            "angleP2P": 1.267,
+            "errorP2P": 0.166,
+            "outputP2P": 0.1086,
+            "reversals": 15
+          }
+        }
+      }
+    },
+    "curve_oscillation": {
+      "total": 9,
+      "bySpeedBand": {
+        "fast": {
+          "count": 5,
+          "meanSeverity": 0.381,
+          "maxSeverity": 0.427,
+          "worst": {
+            "tStart": 41.1,
+            "segment": 15,
+            "peakScore": 0.427,
+            "durationS": 0.35,
+            "speedBand": "fast",
+            "direction": "left",
+            "meanSpeedKph": 63.8
+          }
+        },
+        "highway": {
+          "count": 4,
+          "meanSeverity": 0.492,
+          "maxSeverity": 0.586,
+          "worst": {
+            "tStart": 48.57,
+            "segment": 18,
+            "peakScore": 0.586,
+            "durationS": 0.35,
+            "speedBand": "highway",
+            "direction": "left",
+            "meanSpeedKph": 97.5
+          }
+        }
+      }
+    }
+  },
+  "pidDiagnostics": {
+    "outputUtilizationByBand": {
+      "mid": {
+        "samples": 209,
+        "meanUtilization": 0.108,
+        "p95Utilization": 0.253,
+        "satFraction": 0.0,
+        "angleErrRmsDeg": 1.927,
+        "pFrac": 0.42,
+        "iFrac": 0.456,
+        "fFrac": 0.124
+      },
+      "fast": {
+        "samples": 12539,
+        "meanUtilization": 0.233,
+        "p95Utilization": 0.6,
+        "satFraction": 0.01,
+        "angleErrRmsDeg": 1.53,
+        "pFrac": 0.262,
+        "iFrac": 0.592,
+        "fFrac": 0.146
+      },
+      "highway": {
+        "samples": 7780,
+        "meanUtilization": 0.222,
+        "p95Utilization": 0.509,
+        "satFraction": 0.0,
+        "angleErrRmsDeg": 0.947,
+        "pFrac": 0.282,
+        "iFrac": 0.547,
+        "fFrac": 0.171
+      }
+    },
+    "saturationTotal": 126
+  }
+}

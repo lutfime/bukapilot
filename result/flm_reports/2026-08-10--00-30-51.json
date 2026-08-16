@@ -1,0 +1,92 @@
+{
+  "route": "2026-08-10--00-30-51",
+  "segments": [
+    2,
+    3,
+    5,
+    4,
+    1,
+    0
+  ],
+  "durationMin": 5.0,
+  "sampleCount": 30007,
+  "car": {
+    "carFingerprint": "PROTON_X70",
+    "steerRatio": 20.0,
+    "wheelbase": 2.6700000762939453,
+    "steerActuatorDelay": 0.17000000178813934,
+    "lateralController": "pid",
+    "pid": {
+      "kpBP": [
+        0.0,
+        5.0,
+        15.0,
+        25.0,
+        35.0
+      ],
+      "kpV": [
+        0.0005000000237487257,
+        0.019999999552965164,
+        0.05000000074505806,
+        0.10000000149011612,
+        0.17000000178813934
+      ],
+      "kiBP": [
+        0.0,
+        5.0,
+        15.0,
+        25.0,
+        35.0
+      ],
+      "kiV": [
+        0.0010000000474974513,
+        0.009999999776482582,
+        0.09000000357627869,
+        0.4000000059604645,
+        0.5
+      ],
+      "kf": 2.499999936844688e-05
+    }
+  },
+  "eligibleSampleCount": 1785,
+  "events": {
+    "center_chatter": {
+      "total": 7,
+      "bySpeedBand": {
+        "low": {
+          "count": 7,
+          "meanSeverity": 1.496,
+          "maxSeverity": 1.5,
+          "worst": {
+            "tStart": 33.81,
+            "segment": 2,
+            "peakScore": 1.5,
+            "durationS": 0.39,
+            "speedBand": "low",
+            "direction": "center",
+            "meanSpeedKph": 8.9,
+            "angleP2P": 4.608,
+            "errorP2P": 0.042,
+            "outputP2P": 0.1042,
+            "reversals": 8
+          }
+        }
+      }
+    }
+  },
+  "pidDiagnostics": {
+    "outputUtilizationByBand": {
+      "low": {
+        "samples": 1785,
+        "meanUtilization": 0.167,
+        "p95Utilization": 0.374,
+        "satFraction": 0.0,
+        "angleErrRmsDeg": 16.503,
+        "pFrac": 0.96,
+        "iFrac": 0.0,
+        "fFrac": 0.04
+      }
+    },
+    "saturationTotal": 0
+  }
+}

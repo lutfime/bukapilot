@@ -1,0 +1,439 @@
+{
+  "route": "2026-08-10--00-39-04",
+  "segments": [
+    42,
+    35,
+    34,
+    22,
+    23,
+    16,
+    17,
+    28,
+    29,
+    25,
+    24,
+    11,
+    10,
+    1,
+    0,
+    32,
+    33,
+    38,
+    39,
+    15,
+    14,
+    4,
+    21,
+    20,
+    41,
+    40,
+    36,
+    37,
+    31,
+    30,
+    12,
+    13,
+    2,
+    3,
+    18,
+    19,
+    26,
+    27
+  ],
+  "durationMin": 37.1,
+  "sampleCount": 222673,
+  "car": {
+    "carFingerprint": "PROTON_X70",
+    "steerRatio": 20.0,
+    "wheelbase": 2.6700000762939453,
+    "steerActuatorDelay": 0.17000000178813934,
+    "lateralController": "pid",
+    "pid": {
+      "kpBP": [
+        0.0,
+        5.0,
+        15.0,
+        25.0,
+        35.0
+      ],
+      "kpV": [
+        0.0005000000237487257,
+        0.019999999552965164,
+        0.05000000074505806,
+        0.10000000149011612,
+        0.17000000178813934
+      ],
+      "kiBP": [
+        0.0,
+        5.0,
+        15.0,
+        25.0,
+        35.0
+      ],
+      "kiV": [
+        0.0010000000474974513,
+        0.009999999776482582,
+        0.09000000357627869,
+        0.4000000059604645,
+        0.5
+      ],
+      "kf": 2.499999936844688e-05
+    }
+  },
+  "eligibleSampleCount": 40087,
+  "events": {
+    "understeer": {
+      "total": 33,
+      "bySpeedBand": {
+        "fast": {
+          "count": 4,
+          "meanSeverity": 0.344,
+          "maxSeverity": 0.437,
+          "worst": {
+            "startIdx": 24766,
+            "endIdx": 24775,
+            "tStart": 8.97,
+            "segment": 4,
+            "peakScore": 0.437,
+            "durationS": 0.09,
+            "speedBand": "fast",
+            "direction": "left",
+            "meanSpeedKph": 54.4
+          }
+        },
+        "mid": {
+          "count": 29,
+          "meanSeverity": 0.284,
+          "maxSeverity": 0.503,
+          "worst": {
+            "startIdx": 15681,
+            "endIdx": 15700,
+            "tStart": 38.13,
+            "segment": 2,
+            "peakScore": 0.503,
+            "durationS": 0.19,
+            "speedBand": "mid",
+            "direction": "right",
+            "meanSpeedKph": 35.2
+          }
+        }
+      }
+    },
+    "oversteer": {
+      "total": 7,
+      "bySpeedBand": {
+        "fast": {
+          "count": 1,
+          "meanSeverity": 0.317,
+          "maxSeverity": 0.317,
+          "worst": {
+            "startIdx": 29468,
+            "endIdx": 29472,
+            "tStart": 55.99,
+            "segment": 4,
+            "peakScore": 0.317,
+            "durationS": 0.04,
+            "speedBand": "fast",
+            "direction": "left",
+            "meanSpeedKph": 67.4
+          }
+        },
+        "mid": {
+          "count": 6,
+          "meanSeverity": 0.251,
+          "maxSeverity": 0.283,
+          "worst": {
+            "startIdx": 122398,
+            "endIdx": 122405,
+            "tStart": 25.47,
+            "segment": 25,
+            "peakScore": 0.283,
+            "durationS": 0.07,
+            "speedBand": "mid",
+            "direction": "left",
+            "meanSpeedKph": 33.3
+          }
+        }
+      }
+    },
+    "late_turn_in": {
+      "total": 82,
+      "bySpeedBand": {
+        "fast": {
+          "count": 15,
+          "meanSeverity": 0.606,
+          "maxSeverity": 1.25,
+          "worst": {
+            "startIdx": 29313,
+            "endIdx": 29369,
+            "tStart": 54.44,
+            "segment": 4,
+            "peakScore": 1.25,
+            "durationS": 0.56,
+            "speedBand": "fast",
+            "direction": "left",
+            "meanSpeedKph": 66.9
+          }
+        },
+        "low": {
+          "count": 5,
+          "meanSeverity": 0.426,
+          "maxSeverity": 0.544,
+          "worst": {
+            "startIdx": 169569,
+            "endIdx": 169579,
+            "tStart": 17.25,
+            "segment": 33,
+            "peakScore": 0.544,
+            "durationS": 0.1,
+            "speedBand": "low",
+            "direction": "right",
+            "meanSpeedKph": 21.4
+          }
+        },
+        "mid": {
+          "count": 62,
+          "meanSeverity": 0.457,
+          "maxSeverity": 1.209,
+          "worst": {
+            "startIdx": 124005,
+            "endIdx": 124021,
+            "tStart": 41.54,
+            "segment": 25,
+            "peakScore": 1.209,
+            "durationS": 0.16,
+            "speedBand": "mid",
+            "direction": "right",
+            "meanSpeedKph": 44.3
+          }
+        }
+      }
+    },
+    "early_turn_in": {
+      "total": 2,
+      "bySpeedBand": {
+        "mid": {
+          "count": 2,
+          "meanSeverity": 0.46,
+          "maxSeverity": 0.578,
+          "worst": {
+            "startIdx": 51345,
+            "endIdx": 51356,
+            "tStart": 34.87,
+            "segment": 13,
+            "peakScore": 0.578,
+            "durationS": 0.11,
+            "speedBand": "mid",
+            "direction": "right",
+            "meanSpeedKph": 49.7
+          }
+        }
+      }
+    },
+    "unwind_too_slow": {
+      "total": 39,
+      "bySpeedBand": {
+        "fast": {
+          "count": 4,
+          "meanSeverity": 0.366,
+          "maxSeverity": 0.505,
+          "worst": {
+            "startIdx": 29473,
+            "endIdx": 29498,
+            "tStart": 56.04,
+            "segment": 4,
+            "peakScore": 0.505,
+            "durationS": 0.25,
+            "speedBand": "fast",
+            "direction": "left",
+            "meanSpeedKph": 67.4
+          }
+        },
+        "mid": {
+          "count": 35,
+          "meanSeverity": 0.255,
+          "maxSeverity": 0.476,
+          "worst": {
+            "startIdx": 170024,
+            "endIdx": 170071,
+            "tStart": 21.8,
+            "segment": 33,
+            "peakScore": 0.476,
+            "durationS": 0.47,
+            "speedBand": "mid",
+            "direction": "right",
+            "meanSpeedKph": 21.8
+          }
+        }
+      }
+    },
+    "unwind_too_fast": {
+      "total": 25,
+      "bySpeedBand": {
+        "fast": {
+          "count": 8,
+          "meanSeverity": 0.408,
+          "maxSeverity": 0.694,
+          "worst": {
+            "startIdx": 29387,
+            "endIdx": 29399,
+            "tStart": 55.18,
+            "segment": 4,
+            "peakScore": 0.694,
+            "durationS": 0.12,
+            "speedBand": "fast",
+            "direction": "left",
+            "meanSpeedKph": 67.1
+          }
+        },
+        "low": {
+          "count": 1,
+          "meanSeverity": 0.178,
+          "maxSeverity": 0.178,
+          "worst": {
+            "startIdx": 169877,
+            "endIdx": 169882,
+            "tStart": 20.33,
+            "segment": 33,
+            "peakScore": 0.178,
+            "durationS": 0.05,
+            "speedBand": "low",
+            "direction": "right",
+            "meanSpeedKph": 21.3
+          }
+        },
+        "mid": {
+          "count": 16,
+          "meanSeverity": 0.257,
+          "maxSeverity": 0.428,
+          "worst": {
+            "startIdx": 16779,
+            "endIdx": 16785,
+            "tStart": 49.11,
+            "segment": 2,
+            "peakScore": 0.428,
+            "durationS": 0.06,
+            "speedBand": "mid",
+            "direction": "right",
+            "meanSpeedKph": 41.8
+          }
+        }
+      }
+    },
+    "low_speed_unwillingness": {
+      "total": 5,
+      "bySpeedBand": {
+        "low": {
+          "count": 5,
+          "meanSeverity": 0.326,
+          "maxSeverity": 0.381,
+          "worst": {
+            "startIdx": 169569,
+            "endIdx": 169579,
+            "tStart": 17.25,
+            "segment": 33,
+            "peakScore": 0.381,
+            "durationS": 0.1,
+            "speedBand": "low",
+            "direction": "right",
+            "meanSpeedKph": 21.4
+          }
+        }
+      }
+    },
+    "center_chatter": {
+      "total": 174,
+      "bySpeedBand": {
+        "fast": {
+          "count": 18,
+          "meanSeverity": 1.461,
+          "maxSeverity": 1.5,
+          "worst": {
+            "tStart": 6.51,
+            "segment": 4,
+            "peakScore": 1.5,
+            "durationS": 0.39,
+            "speedBand": "fast",
+            "direction": "center",
+            "meanSpeedKph": 54.7,
+            "angleP2P": 0.669,
+            "errorP2P": 0.133,
+            "outputP2P": 0.1221,
+            "reversals": 18
+          }
+        },
+        "low": {
+          "count": 8,
+          "meanSeverity": 1.275,
+          "maxSeverity": 1.5,
+          "worst": {
+            "tStart": 19.08,
+            "segment": 22,
+            "peakScore": 1.5,
+            "durationS": 0.39,
+            "speedBand": "low",
+            "direction": "center",
+            "meanSpeedKph": 19.9,
+            "angleP2P": 2.538,
+            "errorP2P": 0.018,
+            "outputP2P": 0.0591,
+            "reversals": 14
+          }
+        },
+        "mid": {
+          "count": 148,
+          "meanSeverity": 1.402,
+          "maxSeverity": 1.5,
+          "worst": {
+            "tStart": 46.42,
+            "segment": 2,
+            "peakScore": 1.5,
+            "durationS": 0.39,
+            "speedBand": "mid",
+            "direction": "center",
+            "meanSpeedKph": 41.2,
+            "angleP2P": 1.379,
+            "errorP2P": 0.118,
+            "outputP2P": 0.0666,
+            "reversals": 15
+          }
+        }
+      }
+    }
+  },
+  "pidDiagnostics": {
+    "outputUtilizationByBand": {
+      "low": {
+        "samples": 11802,
+        "meanUtilization": 0.139,
+        "p95Utilization": 0.351,
+        "satFraction": 0.0,
+        "angleErrRmsDeg": 9.781,
+        "pFrac": 0.495,
+        "iFrac": 0.479,
+        "fFrac": 0.026
+      },
+      "mid": {
+        "samples": 26165,
+        "meanUtilization": 0.196,
+        "p95Utilization": 0.471,
+        "satFraction": 0.0,
+        "angleErrRmsDeg": 3.495,
+        "pFrac": 0.343,
+        "iFrac": 0.581,
+        "fFrac": 0.076
+      },
+      "fast": {
+        "samples": 2120,
+        "meanUtilization": 0.212,
+        "p95Utilization": 0.431,
+        "satFraction": 0.0,
+        "angleErrRmsDeg": 2.54,
+        "pFrac": 0.406,
+        "iFrac": 0.497,
+        "fFrac": 0.097
+      }
+    },
+    "saturationTotal": 0
+  }
+}

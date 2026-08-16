@@ -58,3 +58,30 @@ This repo runs on a **Kommu KA2** (Rockchip RK3588). Hardware selection is **run
 - **Network/modem**: KA2 modem logic in `system/hardware/ka2/hardware.py`.
 - **Adding a new daemon**: add to `process_config.py` and ensure gating function reflects KA2 needs.
 
+### Lateral tuning workflow (drive → analyze → retune)
+
+- **Analyzer**: `result/lateral_flm.py` — FLM-style lateral analyzer ported from StarPilot
+  (MIT). Standalone (capnp+zstd+numpy only, no openpilot imports); reads loose
+  `result/drives/*--<seg>.rlog.zst` files and writes one JSON report per route to
+  `result/flm_reports/`.
+  ```
+  .venv/bin/python result/lateral_flm.py result/drives result/drives/Archive "result/drives/Archive 2"
+  .venv/bin/python result/test_lateral_flm.py      # synthetic + real-data cross-validation
+  ```
+- **What it reports**: event counts/severity by speed band (understeer/oversteer,
+  late/early turn-in, unwind too slow/fast, low-speed unwillingness, saturation,
+  center chatter, curve oscillation) + PID diagnostics (p/i/f output split,
+  utilization, angle-error RMS). Report includes the tuning snapshot active
+  during the drive (`car.pid`).
+- **Agent loop**: after a tuning change + drive, re-run and diff against the
+  previous `result/flm_reports/*.json` — event counts/severity and i-fraction are
+  the reward signal. Baseline (2026-08-16, 6 drives on pre-retune PID tuning):
+  integrator-dominated output (i-fraction 0.5–0.7), dominant `late_turn_in`.
+- **Sign convention**: curvature-family signals (desiredCurvature, camera-yaw
+  actual_la) are sign-opposite to steering angle in this stack. Comparisons
+  inside the analyzer are internally consistent; keep it in mind when comparing
+  against steering-angle plots.
+- Prefer this over the ad-hoc `result/pid_analyze*.py` / `wobble_*.py` /
+  `corner_*.py` scripts for whole-drive lateral assessment; those remain useful
+  for single-incident deep dives.
+

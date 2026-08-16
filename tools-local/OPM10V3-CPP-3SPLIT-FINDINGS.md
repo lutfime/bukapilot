@@ -16,6 +16,15 @@
 > 3. **Diag models: method INVALID** — exposing intermediates changes the numerics (see below).
 > 4. **tanh + erf-split Gelu rewrites: REFUTED** — both worse than erf (up to 100% inf).
 >    Every graph-rewrite theory is now eliminated; stop attempting them.
+>
+> **🔴 2026-08-16 (latest): TRUE-QUANTIZED path in progress — DEVICE WENT DOWN loading q16. SEE NEW
+> SECTION "QUANTIZED CALIBRATION PATH (2026-08-16)" AT BOTTOM. Key facts: all prior models shipped
+> PURE fp16 (do_quantization=False ignores quantized_dtype!); the vendor's fp16-overflow fix
+> (real-quantized w8a8/w16a16i + REAL calibration) was never tried until now. q8+q16 models built
+> with 100 real device-dumped features; q16 on_policy deployed md5-verified; DEVICE HOST WENT DOWN
+> seconds after the harness loaded q16 — suspected driver-level crash (NPU driver 0.9.8 may not
+> support w16a16i execution). NEEDS: device power-cycle, dmesg check, then test q8 FIRST (known
+> safe to load), q16 only cautiously.**
 
 ## Timeline of failures (each superseded — kept for the record)
 
@@ -873,3 +882,72 @@ on the RK3588 NPU, full stop. No further graph-rewrite attempts are warranted.
 - Device state after tests: wmiv12 selected, erf/base restored under standard names,
   scaled/diag/tanh/erfsplit models present under their own names (not loaded by modeld),
   service healthy (clean overnight reboot, normal daemon bring-up, 37°C).
+
+---
+
+## 🟡 QUANTIZED CALIBRATION PATH (2026-08-16) — IN PROGRESS, device down mid-test
+
+### The discovery that motivated this path
+
+**Every model we ever shipped was PURE fp16.** Our conversion config set
+`quantized_dtype='w16a16i'` but `do_quantization=False` — per Rockchip docs and our own
+MODEL-CONVERSION-GUIDE §4, `do_quantization=False` means the dtype is IGNORED and the model
+ships fp16. The vendor's documented fix for fp16 overflow — TRUE quantization (integer
+arithmetic, cannot produce inf) with real calibration data — was never actually attempted:
+- INT8 v1/v2 DID set `do_quantization=True` BUT were calibrated on SYNTHETIC random-walk
+  features → all-zeros on NPU (suspected: synthetic ranges blew out the quantization scales)
+- w16a16i (INT16, ~0.01% error, vendor's fp16-overflow remedy) was never built at all
+
+Web research the same day: GitHub #375 reports w16a16i producing wrong output on RV1106
+(open, no fix; untested on RK3588); hybrid quantization (per-layer dtype cfg,
+`hybrid_quantization_step1/2`) exists in 2.3.2 but unused; `mmse` quantized_method does NOT
+exist in 2.3.2 (valid: layer/channel/group{SIZE}).
+
+### What was done (2026-08-16)
+
+1. **`tools-local/dump_calibration_features.py`** — ran ON DEVICE: 100 REAL features_buffer
+   windows (production construction: vision hidden_states output[117:629], 25-stack; range
+   [-1.39, 1.32]) → `/data/calib/dataset.txt` + npy samples. Transferred back to Mac.
+2. **`tools-local/convert_opm10v3_quantized.py`** — Docker conversion with
+   `do_quantization=True` + the real calibration dataset:
+   - `driving_{on,off}_policy_opm10v3_q8.rknn`  (w8a8 + channel,  8.5/11.7 MB)
+   - `driving_{on,off}_policy_opm10v3_q16.rknn` (w16a16i + channel, 13.9/14.4 MB)
+   - Simulator sanity: all 4 non-zero (q8 on=6.7 / off=24.9 max; q16 on=6.7 / off=25.0)
+   - Commit `2a4d30738` (also note: mmse removed — invalid in 2.3.2)
+3. **q16 on_policy deployed to device** via chunked base64 over ssh MCP — md5 VERIFIED
+   (`33155bf5…`). Harness `/tmp/test_q16.py` (erf vs q16, same seed/features as prior
+   variant tests) launched detached with nohup.
+
+### 🔴 Device went DOWN seconds after the harness loaded q16
+
+"Host is down" from that moment on; persistent over minutes (not a normal reboot cycle).
+Timing: device healthy through calib dump + transfer; died right at q16 model load/inference.
+
+**Suspected cause: driver-level crash.** Device NPU **driver is 0.9.8** (older than the
+2.3.2 userspace librknnrt). If the driver doesn't support w16a16i model EXECUTION, loading
+it via rknnlite could panic the kernel → whole device down. (C API already crashes on int8
+inputs; the driver may be even less tolerant of int16 graphs.)
+
+### NEXT STEPS when device is back (for whoever picks this up)
+
+1. Power-cycle the device physically.
+2. `cat /tmp/test_q16.log` — did the harness output anything before the crash?
+3. `dmesg | tail -50` / journalctl — kernel panic trace? Look for RKNPU/NPU driver oops.
+4. **Test q8 FIRST, NOT q16** — INT8 models are KNOWN-SAFE to load via rknnlite on this
+   device (v1/v2 ran without crashing; they output zeros but that was synthetic calibration,
+   which q8 with REAL calibration now fixes). q8 harness = same pattern as /tmp/test_q16.py
+   with the q8 filename. q8 files still need transfer to device (in git commit 2a4d30738;
+   device gitlab remote has auth issues — use the chunked-base64 method or fix remote auth).
+5. **q16 only cautiously** — if dmesg shows NPU panic on q16 load, mark q16 UNDEPLOYABLE on
+   driver 0.9.8 and rely on q8. (Driver upgrade is system-level risk — don't without a plan.)
+6. Verdict rules: q8 clean (no inf, no zeros, tracks erf within quantization error) →
+   opm10v3 REVIVED, drive-test. q8 zeros again → real-calibration theory wrong too, case
+   closes for quantization as well. q8 inf → int8 arithmetic can't inf; would indicate
+   runtime decode issue (suspect driver again).
+
+### Device state at time of crash
+- SelectedDrivingModel = wmiv12 (safe; unchanged by this session)
+- q16 on_policy + metadata present in models dir (md5-verified); q8/q16 off_policy NOT yet
+  transferred (only in git)
+- erf/base/tanh/erfsplit/scaled/diag models present under their own names (not loaded)
+- `/data/calib/` calibration dataset intact; `/tmp/test_q16.py` harness script on device

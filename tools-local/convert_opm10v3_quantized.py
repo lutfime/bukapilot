@@ -93,7 +93,7 @@ if __name__ == "__main__":
   ok = True
   if args.variant in ("both", "w8a8"):
     for head in ["on_policy", "off_policy"]:
-      ok &= convert(head, "w8a8", "mmse", args.calib, "q8mmse")
+      ok &= convert(head, "w8a8", "channel", args.calib, "q8")
   if args.variant in ("both", "w16a16i"):
     for head in ["on_policy", "off_policy"]:
       ok &= convert(head, "w16a16i", "channel", args.calib, "q16")

@@ -936,8 +936,8 @@ inputs; the driver may be even less tolerant of int16 graphs.)
 4. **Test q8 FIRST, NOT q16** — INT8 models are KNOWN-SAFE to load via rknnlite on this
    device (v1/v2 ran without crashing; they output zeros but that was synthetic calibration,
    which q8 with REAL calibration now fixes). q8 harness = same pattern as /tmp/test_q16.py
-   with the q8 filename. q8 files still need transfer to device (in git commit 2a4d30738;
-   device gitlab remote has auth issues — use the chunked-base64 method or fix remote auth).
+   with the q8 filename. q8 files still need copying to device (they are in git commit 2a4d30738 on the Mac;
+   device sync is DIRECT FILE COPY, not git — e.g. the chunked-base64-over-ssh method).
 5. **q16 only cautiously** — if dmesg shows NPU panic on q16 load, mark q16 UNDEPLOYABLE on
    driver 0.9.8 and rely on q8. (Driver upgrade is system-level risk — don't without a plan.)
 6. Verdict rules: q8 clean (no inf, no zeros, tracks erf within quantization error) →
